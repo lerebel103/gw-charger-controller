@@ -31,6 +31,7 @@ class AppState:
     ev_current_c: float | None = None
     ev_completion_time_h: int | None = None
     ev_total_energy_wh: float | None = None
+    ev_soc_pct: float | None = None
 
     # Computed diagnostics
     l1_voltage_drop_pct: float | None = None
@@ -104,6 +105,7 @@ class StateSnapshot:
     ev_current_c: float | None = None
     ev_completion_time_h: int | None = None
     ev_total_energy_wh: float | None = None
+    ev_soc_pct: float | None = None
     l1_voltage_drop_pct: float | None = None
     l2_voltage_drop_pct: float | None = None
     l3_voltage_drop_pct: float | None = None

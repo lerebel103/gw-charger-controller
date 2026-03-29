@@ -116,11 +116,9 @@ class ControlLoop:
                 and state.solar_battery_soc_pct <= state.solar_battery_discharge_floor_pct
             )
 
-            if at_floor:
-                ev_soc = getattr(state, "ev_soc_pct", None)  # may be None if unavailable
-                if ev_soc is not None and ev_soc >= state.ev_min_soc_pct:
-                    return 0.0  # EV has reached minimum SOC — stop charging
-                # else: EV SOC unknown or below minimum — continue charging
+            if at_floor and state.ev_soc_pct is not None and state.ev_soc_pct >= state.ev_min_soc_pct:
+                return 0.0  # EV has reached minimum SOC — stop charging
+            # If at floor but EV SOC unknown or below minimum — continue charging
 
             setpoint = clamp(state.solar_battery_max_ev_charge_power_w, _MIN_CHARGE_W, _MAX_CHARGE_W)
 
@@ -221,6 +219,7 @@ class ControlLoop:
                 ev_current_c=self._state.ev_current_c,
                 ev_completion_time_h=self._state.ev_completion_time_h,
                 ev_total_energy_wh=self._state.ev_total_energy_wh,
+                ev_soc_pct=self._state.ev_soc_pct,
                 l1_voltage_drop_pct=self._state.l1_voltage_drop_pct,
                 l2_voltage_drop_pct=self._state.l2_voltage_drop_pct,
                 l3_voltage_drop_pct=self._state.l3_voltage_drop_pct,

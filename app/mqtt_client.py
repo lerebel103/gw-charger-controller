@@ -17,6 +17,7 @@ from app.state import AppState, StateSnapshot
 logger = logging.getLogger(__name__)
 
 _PREFIX = "ev_charger"
+_VEHICLE_SOC_TOPIC = f"{_PREFIX}/vehicle/soc/set"
 
 _DEVICE = {
     "identifiers": ["ev_charger_integration"],
@@ -147,6 +148,7 @@ ENTITIES: list[dict[str, Any]] = [
     _sensor("ev_charger_l2_voltage_drop", "L2 Voltage Drop %", "l2_voltage_drop_perc", "%", None, "measurement"),
     _sensor("ev_charger_l3_voltage_drop", "L3 Voltage Drop %", "l3_voltage_drop_perc", "%", None, "measurement"),
     _sensor("ev_charger_completion_time", "Completion Time", "completion_time", "h", None, "measurement"),
+    _sensor("ev_charger_soc", "EV SOC", "ev_soc", "%", "battery", "measurement"),
     # Binary sensors
     _binary_sensor("ev_charger_connected", "EV Connected", "connected", "connectivity"),
     # Select
@@ -346,6 +348,7 @@ class MQTTClient:
             _fmt_drop(snapshot.l3_voltage_drop_pct),
         )
         await self._client.publish(f"{_PREFIX}/sensor/completion_time/state", _fmt(snapshot.ev_completion_time_h))
+        await self._client.publish(f"{_PREFIX}/sensor/ev_soc/state", _fmt(snapshot.ev_soc_pct))
 
         # Binary sensor
         await self._client.publish(
@@ -383,6 +386,21 @@ class MQTTClient:
     async def _handle_command(self, topic: str, payload: str) -> None:
         """Validate payload, update AppState, persist, and trigger reconnects."""
         topic_str = str(topic)
+
+        # Handle external vehicle SOC input (not a config entity)
+        if topic_str == _VEHICLE_SOC_TOPIC:
+            try:
+                soc = float(payload)
+            except (ValueError, TypeError):
+                logger.warning("Invalid vehicle SOC value: %s", payload)
+                return
+            if not (0 <= soc <= 100):
+                logger.warning("Vehicle SOC out of range [0-100]: %s", soc)
+                return
+            self._state.ev_soc_pct = soc
+            logger.info("Received vehicle SOC: %.1f%%", soc)
+            return
+
         mapping = _COMMAND_MAP.get(topic_str)
         if mapping is None:
             logger.warning("Unknown command topic: %s", topic_str)
@@ -481,6 +499,9 @@ class MQTTClient:
                         cmd = entity.get("command_topic")
                         if cmd:
                             await client.subscribe(cmd)
+
+                    # Subscribe to external vehicle SOC input
+                    await client.subscribe(_VEHICLE_SOC_TOPIC)
 
                     # Publish current config state
                     await self._publish_config_state()
