@@ -63,6 +63,23 @@ make build     # Build Docker image
 make push      # Build & push multi-arch (amd64 + arm64)
 ```
 
+## Vehicle SOC Input
+
+The GW22K-HCA-20 does not expose the vehicle's state of charge over Modbus. To use SOC-aware features (like stopping charging when the EV reaches a target SOC during the battery discharge window), you need to feed the SOC in externally via MQTT.
+
+**Topic:** `ev_charger/vehicle/soc/set`
+**Payload:** a plain number representing the SOC percentage (0–100)
+**QoS:** 0 or 1
+
+Example (using `mosquitto_pub`):
+```bash
+mosquitto_pub -h 192.168.1.10 -t ev_charger/vehicle/soc/set -m "72"
+```
+
+This can be automated from Home Assistant using an automation that publishes the vehicle's SOC (e.g. from a car integration) to this topic on a regular interval. Most vehicle manufacturers provide a cloud API that exposes SOC — check if a Home Assistant integration exists for your car (e.g. Tesla, Hyundai/Kia Connect, BMW Connected Drive, etc.) and set up a simple automation to forward the SOC value to this topic whenever it updates.
+
+If no SOC update is received for 5 minutes, the value is treated as unavailable and the controller assumes the EV has not yet reached its minimum SOC target (charging continues).
+
 ## Hardware
 
 - **EV Charger**: GoodWe GW22K-HCA-20 (Modbus TCP, slave ID 247)
