@@ -21,5 +21,5 @@ manual_power_w: 3680
 solar_battery_discharge_start: "23:00"
 solar_battery_discharge_end: "06:00"
 solar_battery_discharge_floor_pct: 20
-solar_battery_max_charge_power_w: 5000
+solar_battery_max_ev_charge_power_w: 5000
 ev_min_soc_pct: 40

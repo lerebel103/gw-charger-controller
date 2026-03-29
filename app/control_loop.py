@@ -122,7 +122,20 @@ class ControlLoop:
                     return 0.0  # EV has reached minimum SOC — stop charging
                 # else: EV SOC unknown or below minimum — continue charging
 
-            return clamp(state.solar_battery_max_charge_power_w, _MIN_CHARGE_W, _MAX_CHARGE_W)
+            setpoint = clamp(state.solar_battery_max_ev_charge_power_w, _MIN_CHARGE_W, _MAX_CHARGE_W)
+
+            # Guard: reduce EV setpoint if battery discharge exceeds the allowed limit.
+            # solar_battery_power_w is negative when discharging.
+            if state.solar_battery_power_w is not None and state.solar_battery_power_w < 0:
+                discharge_w = abs(state.solar_battery_power_w)
+                overshoot = discharge_w - state.solar_battery_max_discharge_w
+                if overshoot > 0:
+                    setpoint = setpoint - overshoot
+                    if setpoint < _MIN_CHARGE_W:
+                        return 0.0
+                    setpoint = clamp(setpoint, _MIN_CHARGE_W, _MAX_CHARGE_W)
+
+            return setpoint
 
         # Outside battery discharge window: charge from grid export only
         grid_power = state.grid_power_w if state.grid_power_w is not None else 0.0

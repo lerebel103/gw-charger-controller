@@ -47,7 +47,8 @@ class AppState:
     solar_battery_discharge_floor_pct: float = 20.0
     solar_battery_discharge_start: str = "23:00"
     solar_battery_discharge_end: str = "06:00"
-    solar_battery_max_charge_power_w: float = 5000.0
+    solar_battery_max_ev_charge_power_w: float = 5000.0
+    solar_battery_max_discharge_w: float = 6000.0
     control_loop_interval_s: float = 5.0
 
     # Device connection config
@@ -72,7 +73,8 @@ PERSISTED_FIELDS: set[str] = {
     "solar_battery_discharge_floor_pct",
     "solar_battery_discharge_start",
     "solar_battery_discharge_end",
-    "solar_battery_max_charge_power_w",
+    "solar_battery_max_ev_charge_power_w",
+    "solar_battery_max_discharge_w",
     "control_loop_interval_s",
     "ev_charger_ip",
     "ev_charger_port",
