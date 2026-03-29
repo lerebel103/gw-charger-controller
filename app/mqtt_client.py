@@ -98,7 +98,7 @@ def _number(
     max_val: float,
     step: float,
     unit: str,
-    mode: str = "auto",
+    mode: str = "box",
 ) -> dict[str, Any]:
     d: dict[str, Any] = {
         "component": "number",
@@ -183,7 +183,6 @@ ENTITIES: list[dict[str, Any]] = [
         247,
         1,
         "",
-        mode="box",
     ),
     _number(
         "ev_charger_control_loop_interval",
@@ -193,7 +192,6 @@ ENTITIES: list[dict[str, Any]] = [
         60,
         1,
         "s",
-        mode="box",
     ),
     # Text
     _text("ev_charger_solar_battery_discharge_start", "Solar Battery Discharge Start", "solar_battery_discharge_start"),
