@@ -1,4 +1,4 @@
-# GW Charger Controller
+# Goodwe HCA G2 EV Charger Controller
 
 A Docker-based integration that bridges a GW22K-HCA-20 EV charger and a Victron GX device (both over Modbus TCP) with Home Assistant via MQTT discovery.
 
