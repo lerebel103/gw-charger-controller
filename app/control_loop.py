@@ -81,13 +81,11 @@ class ControlLoop:
         state: AppState,
         ev_client: EVChargerModbusClient,
         publish_queue: asyncio.Queue,
-        interval_s: float = 10.0,
         config_manager: ConfigManager | None = None,
     ) -> None:
         self._state = state
         self._ev_client = ev_client
         self._publish_queue = publish_queue
-        self._interval_s = interval_s
         self._config_manager = config_manager
         self._eco_paused_at: datetime | None = None  # hysteresis: when pause condition first detected
         self._prev_ev_connected: bool = state.ev_connected
@@ -218,4 +216,4 @@ class ControlLoop:
             )
             await self._publish_queue.put(snapshot)
 
-            await asyncio.sleep(self._interval_s)
+            await asyncio.sleep(self._state.control_loop_interval_s)
