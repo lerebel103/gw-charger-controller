@@ -233,6 +233,9 @@ _SELECT_OPTIONS: dict[str, list[str]] = {
     "charge_mode": ["Eco", "Manual"],
 }
 
+# Build reverse map: command_topic → state_topic (from ENTITIES)
+_CMD_TO_STATE_TOPIC: dict[str, str] = {e["command_topic"]: e["state_topic"] for e in ENTITIES if "command_topic" in e}
+
 # Fields that trigger a Modbus client reconnect
 _EV_RECONNECT_FIELDS = {"ev_charger_ip", "ev_charger_port"}
 _VICTRON_RECONNECT_FIELDS = {"victron_ip", "victron_port"}
@@ -423,6 +426,12 @@ class MQTTClient:
 
         # Persist
         self._config_manager.schedule_persist(self._state)
+
+        # Republish the updated value to the state topic so HA confirms the change
+        state_topic = _CMD_TO_STATE_TOPIC.get(topic_str)
+        if state_topic and self._client is not None:
+            new_value = str(getattr(self._state, attr))
+            await self._client.publish(state_topic, new_value, retain=True)
 
         # Trigger reconnect for device connection changes
         if attr in _EV_RECONNECT_FIELDS and self._ev_client is not None:
