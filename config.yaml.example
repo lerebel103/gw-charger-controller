@@ -1,0 +1,25 @@
+# MQTT broker (required)
+mqtt_host: "192.168.1.10"
+mqtt_port: 1883
+mqtt_username: "ha_user"
+mqtt_password: "secret"
+
+# EV charger connection (GW22K-HCA-20)
+ev_charger_ip: "192.168.1.20"
+ev_charger_port: 502
+
+# Victron GX connection
+victron_ip: "192.168.1.30"
+victron_port: 502
+victron_grid_meter_unit_id: 30
+
+# Charge mode: "Eco" or "Manual" (configurable from HA)
+charge_mode: "Eco"
+manual_power_w: 3680
+
+# Eco mode: battery discharge window (configurable from HA)
+solar_battery_discharge_start: "23:00"
+solar_battery_discharge_end: "06:00"
+solar_battery_discharge_floor_pct: 20
+solar_battery_max_charge_power_w: 5000
+ev_min_soc_pct: 40

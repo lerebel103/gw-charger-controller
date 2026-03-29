@@ -1,0 +1,38 @@
+services:
+  gw-evcharger-controller:
+    build: .
+    image: gw-evcharger-controller:latest
+    container_name: gw-evcharger-controller
+    restart: unless-stopped
+    
+    # Mount local config file to container
+    volumes:
+      - ./config.yaml:/etc/gw-evcharger-controller/config.yaml:ro
+    
+    # Network mode host for easier access to local network devices
+    # Alternative: use bridge mode and ensure inverter is accessible
+    network_mode: host
+    
+    # Environment variables (optional - config file takes precedence)
+    environment:
+      - PYTHONUNBUFFERED=1
+    
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # Health check (optional)
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+# Optional: Define networks if not using host mode
+# networks:
+#   fronius-net:
+#     driver: bridge
