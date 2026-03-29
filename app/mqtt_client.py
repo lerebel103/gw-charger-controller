@@ -98,8 +98,9 @@ def _number(
     max_val: float,
     step: float,
     unit: str,
+    mode: str = "auto",
 ) -> dict[str, Any]:
-    return {
+    d: dict[str, Any] = {
         "component": "number",
         "unique_id": unique_id,
         "name": name,
@@ -110,6 +111,9 @@ def _number(
         "step": step,
         "unit_of_measurement": unit,
     }
+    if mode != "auto":
+        d["mode"] = mode
+    return d
 
 
 def _text(
@@ -162,8 +166,26 @@ ENTITIES: list[dict[str, Any]] = [
     ),
     _number("ev_charger_port", "EV Charger Port", "ev_charger_port", 1, 65535, 1, ""),
     _number("victron_port", "Victron GX Port", "victron_port", 1, 65535, 1, ""),
-    _number("victron_grid_meter_unit_id", "Victron Grid Meter Unit ID", "victron_grid_meter_unit_id", 1, 247, 1, ""),
-    _number("ev_charger_control_loop_interval", "Control Loop Interval", "control_loop_interval", 1, 60, 1, "s"),
+    _number(
+        "victron_grid_meter_unit_id",
+        "Victron Grid Meter Unit ID",
+        "victron_grid_meter_unit_id",
+        1,
+        247,
+        1,
+        "",
+        mode="box",
+    ),
+    _number(
+        "ev_charger_control_loop_interval",
+        "Control Loop Interval",
+        "control_loop_interval",
+        1,
+        60,
+        1,
+        "s",
+        mode="box",
+    ),
     # Text
     _text("ev_charger_solar_battery_discharge_start", "Solar Battery Discharge Start", "solar_battery_discharge_start"),
     _text("ev_charger_solar_battery_discharge_end", "Solar Battery Discharge End", "solar_battery_discharge_end"),
@@ -264,7 +286,7 @@ class MQTTClient:
                 payload["command_topic"] = entity["command_topic"]
             if "options" in entity:
                 payload["options"] = entity["options"]
-            for key in ("min", "max", "step"):
+            for key in ("min", "max", "step", "mode"):
                 if key in entity:
                     payload[key] = entity[key]
 
