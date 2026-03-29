@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time as _time
 from datetime import datetime, time
 
 from app.config import ConfigManager
@@ -20,6 +21,7 @@ _MIN_CHARGE_W = 1380.0
 _MAX_CHARGE_W = 11000.0
 _GRID_EXPORT_START_THRESHOLD_W = 1400.0
 _ECO_PAUSE_HYSTERESIS_S = 300.0  # 5 minutes
+_EV_SOC_STALE_S = 300.0  # 5 minutes — treat SOC as unavailable if not updated
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +96,15 @@ class ControlLoop:
     # Task 6.6 — Setpoint computation
     # ------------------------------------------------------------------
 
+    def _get_ev_soc(self) -> float | None:
+        """Return ev_soc_pct if fresh (updated within _EV_SOC_STALE_S), else None."""
+        state = self._state
+        if state.ev_soc_pct is None or state.ev_soc_pct_updated_at is None:
+            return None
+        if (_time.monotonic() - state.ev_soc_pct_updated_at) > _EV_SOC_STALE_S:
+            return None
+        return state.ev_soc_pct
+
     def _compute_setpoint(self) -> float | None:
         """Compute the charge power setpoint (watts), or None if no vehicle."""
         state = self._state
@@ -116,7 +127,9 @@ class ControlLoop:
                 and state.solar_battery_soc_pct <= state.solar_battery_discharge_floor_pct
             )
 
-            if at_floor and state.ev_soc_pct is not None and state.ev_soc_pct >= state.ev_min_soc_pct:
+            # Check if EV SOC is fresh (updated within _EV_SOC_STALE_S)
+            ev_soc = self._get_ev_soc()
+            if at_floor and ev_soc is not None and ev_soc >= state.ev_min_soc_pct:
                 return 0.0  # EV has reached minimum SOC — stop charging
             # If at floor but EV SOC unknown or below minimum — continue charging
 
@@ -219,7 +232,7 @@ class ControlLoop:
                 ev_current_c=self._state.ev_current_c,
                 ev_completion_time_h=self._state.ev_completion_time_h,
                 ev_total_energy_wh=self._state.ev_total_energy_wh,
-                ev_soc_pct=self._state.ev_soc_pct,
+                ev_soc_pct=self._get_ev_soc(),
                 l1_voltage_drop_pct=self._state.l1_voltage_drop_pct,
                 l2_voltage_drop_pct=self._state.l2_voltage_drop_pct,
                 l3_voltage_drop_pct=self._state.l3_voltage_drop_pct,

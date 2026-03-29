@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from typing import Any
 
 import aiomqtt
@@ -398,6 +399,7 @@ class MQTTClient:
                 logger.warning("Vehicle SOC out of range [0-100]: %s", soc)
                 return
             self._state.ev_soc_pct = soc
+            self._state.ev_soc_pct_updated_at = time.monotonic()
             logger.info("Received vehicle SOC: %.1f%%", soc)
             return
 

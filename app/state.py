@@ -32,6 +32,7 @@ class AppState:
     ev_completion_time_h: int | None = None
     ev_total_energy_wh: float | None = None
     ev_soc_pct: float | None = None
+    ev_soc_pct_updated_at: float | None = None  # time.monotonic() of last SOC update
 
     # Computed diagnostics
     l1_voltage_drop_pct: float | None = None
