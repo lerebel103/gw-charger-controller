@@ -213,10 +213,12 @@ class ControlLoop:
             setpoint = self._compute_setpoint()
 
             if setpoint is not None and setpoint > 0:
-                await self._ev_client.write_enable(True)
+                # TODO: Re-enable once charger behaviour is confirmed
+                # await self._ev_client.write_enable(True)
                 await self._ev_client.write_setpoint(setpoint)
             else:
-                await self._ev_client.write_enable(False)
+                # await self._ev_client.write_enable(False)
+                pass
 
             self._state.commanded_setpoint_w = setpoint
 
