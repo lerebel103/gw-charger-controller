@@ -60,9 +60,19 @@ def is_within_discharge_window(state: AppState) -> bool:
 
     if start <= end:
         # Non-spanning window, e.g. 06:00–18:00
-        return start <= now < end
-    # Midnight-spanning window, e.g. 23:00–06:00
-    return now >= start or now < end
+        result = start <= now < end
+    else:
+        # Midnight-spanning window, e.g. 23:00–06:00
+        result = now >= start or now < end
+
+    logger.debug(
+        "Discharge window check: now=%s start=%s end=%s → %s",
+        now.strftime("%H:%M:%S"),
+        state.solar_battery_discharge_start,
+        state.solar_battery_discharge_end,
+        result,
+    )
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +168,12 @@ class ControlLoop:
         if state.charge_mode == "Manual":
             self._eco_paused_at = None
             return clamp(state.manual_power_w, _MIN_CHARGE_W, _MAX_CHARGE_W)
+
+        # --- Standby mode ---
+        if state.charge_mode == "Standby":
+            self._eco_paused_at = None
+            self._eco_charging = False
+            return 0.0
 
         # --- Eco mode ---
         if is_within_discharge_window(state):

@@ -16,6 +16,7 @@ services:
     # Environment variables (optional - config file takes precedence)
     environment:
       - PYTHONUNBUFFERED=1
+      - TZ=${TZ:-Australia/Perth}
     
     # Logging configuration
     logging:

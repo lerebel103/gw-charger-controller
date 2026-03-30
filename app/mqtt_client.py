@@ -153,7 +153,7 @@ ENTITIES: list[dict[str, Any]] = [
     # Binary sensors
     _binary_sensor("ev_charger_connected", "EV Connected", "connected", "connectivity"),
     # Select
-    _select("ev_charger_mode", "Charge Mode", "mode", ["Eco", "Manual"]),
+    _select("ev_charger_mode", "Charge Mode", "mode", ["Eco", "Manual", "Standby"]),
     # Numbers
     _number("ev_charger_manual_power", "Manual Charge Power", "manual_power", 4200, 22000, 100, "W"),
     _number("ev_charger_ev_min_soc", "Min EV SOC", "ev_min_soc", 0, 100, 1, "%"),
@@ -253,7 +253,7 @@ _NUMBER_RANGES: dict[str, tuple[float, float]] = {
 
 # Select entity valid options
 _SELECT_OPTIONS: dict[str, list[str]] = {
-    "charge_mode": ["Eco", "Manual"],
+    "charge_mode": ["Eco", "Manual", "Standby"],
 }
 
 # Build reverse map: command_topic → state_topic (from ENTITIES)
