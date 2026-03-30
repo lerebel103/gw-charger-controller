@@ -155,15 +155,15 @@ ENTITIES: list[dict[str, Any]] = [
     # Select
     _select("ev_charger_mode", "Charge Mode", "mode", ["Eco", "Manual"]),
     # Numbers
-    _number("ev_charger_manual_power", "Manual Charge Power", "manual_power", 1380, 11000, 100, "W"),
+    _number("ev_charger_manual_power", "Manual Charge Power", "manual_power", 4200, 22000, 100, "W"),
     _number("ev_charger_ev_min_soc", "Min EV SOC", "ev_min_soc", 0, 100, 1, "%"),
     _number("ev_charger_solar_battery_floor", "Solar Battery Discharge Floor", "solar_battery_floor", 0, 100, 1, "%"),
     _number(
         "ev_charger_solar_battery_max_ev_charge",
         "EV Charge Power (Battery Window)",
         "solar_battery_max_ev_charge",
-        1380,
-        11000,
+        4200,
+        22000,
         100,
         "W",
     ),
@@ -196,6 +196,15 @@ ENTITIES: list[dict[str, Any]] = [
         1,
         "s",
     ),
+    _number(
+        "ev_charger_eco_mean_window",
+        "Eco Mean Window",
+        "eco_mean_window",
+        1,
+        10,
+        1,
+        "min",
+    ),
     # Text
     _text("ev_charger_solar_battery_discharge_start", "Solar Battery Discharge Start", "solar_battery_discharge_start"),
     _text("ev_charger_solar_battery_discharge_end", "Solar Battery Discharge End", "solar_battery_discharge_end"),
@@ -221,6 +230,7 @@ _COMMAND_MAP: dict[str, tuple[str, str]] = {
     f"{_PREFIX}/number/victron_port/set": ("victron_port", "int"),
     f"{_PREFIX}/number/victron_grid_meter_unit_id/set": ("victron_grid_meter_unit_id", "int"),
     f"{_PREFIX}/number/control_loop_interval/set": ("control_loop_interval_s", "float"),
+    f"{_PREFIX}/number/eco_mean_window/set": ("eco_mean_window_minutes", "int"),
     f"{_PREFIX}/text/solar_battery_discharge_start/set": ("solar_battery_discharge_start", "hhmm"),
     f"{_PREFIX}/text/solar_battery_discharge_end/set": ("solar_battery_discharge_end", "hhmm"),
     f"{_PREFIX}/text/ev_charger_ip/set": ("ev_charger_ip", "str"),
@@ -229,15 +239,16 @@ _COMMAND_MAP: dict[str, tuple[str, str]] = {
 
 # Number entity ranges for validation: state_attr → (min, max)
 _NUMBER_RANGES: dict[str, tuple[float, float]] = {
-    "manual_power_w": (1380, 11000),
+    "manual_power_w": (4200, 22000),
     "ev_min_soc_pct": (0, 100),
     "solar_battery_discharge_floor_pct": (0, 100),
-    "solar_battery_max_ev_charge_power_w": (1380, 11000),
+    "solar_battery_max_ev_charge_power_w": (4200, 22000),
     "solar_battery_max_discharge_w": (0, 15000),
     "ev_charger_port": (1, 65535),
     "victron_port": (1, 65535),
     "victron_grid_meter_unit_id": (1, 247),
     "control_loop_interval_s": (1, 60),
+    "eco_mean_window_minutes": (1, 10),
 }
 
 # Select entity valid options
@@ -372,6 +383,7 @@ class MQTTClient:
             (f"{_PREFIX}/number/victron_port/state", str(s.victron_port)),
             (f"{_PREFIX}/number/victron_grid_meter_unit_id/state", str(s.victron_grid_meter_unit_id)),
             (f"{_PREFIX}/number/control_loop_interval/state", str(s.control_loop_interval_s)),
+            (f"{_PREFIX}/number/eco_mean_window/state", str(s.eco_mean_window_minutes)),
             (f"{_PREFIX}/text/solar_battery_discharge_start/state", s.solar_battery_discharge_start),
             (f"{_PREFIX}/text/solar_battery_discharge_end/state", s.solar_battery_discharge_end),
             (f"{_PREFIX}/text/ev_charger_ip/state", s.ev_charger_ip),

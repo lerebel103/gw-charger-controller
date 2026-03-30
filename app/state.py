@@ -52,6 +52,7 @@ class AppState:
     solar_battery_max_ev_charge_power_w: float = 5000.0
     solar_battery_max_discharge_w: float = 6000.0
     control_loop_interval_s: float = 5.0
+    eco_mean_window_minutes: int = 5  # rolling average window for eco start/stop decisions (1–10 min)
 
     # Device connection config
     ev_charger_ip: str = ""
@@ -78,6 +79,7 @@ PERSISTED_FIELDS: set[str] = {
     "solar_battery_max_ev_charge_power_w",
     "solar_battery_max_discharge_w",
     "control_loop_interval_s",
+    "eco_mean_window_minutes",
     "ev_charger_ip",
     "ev_charger_port",
     "victron_ip",

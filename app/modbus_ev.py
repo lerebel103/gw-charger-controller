@@ -30,7 +30,7 @@ _REG_CAR_CONNECTION = 10075
 _REG_PLUG_AND_CHARGE = 10019  # 1 = Plug and Charge mode
 _REG_MAX_CHARGING_POWER = 10029
 _REG_CHARGER_ENABLE = 10060
-_RAW_SETPOINT_MIN = 14  # minimum raw value (= 1.4 kW)
+_RAW_SETPOINT_MIN = 42  # minimum raw value (= 4.2 kW); 0 is also valid (pause)
 
 
 class EVChargerModbusClient:
@@ -86,6 +86,9 @@ class EVChargerModbusClient:
             return
 
         raw = round(power_w / 100) if power_w > 0 else 0
+        # Charger accepts 0 (pause) or >= 42 (4.2 kW); reject values in between
+        if raw > 0 and raw < _RAW_SETPOINT_MIN:
+            raw = _RAW_SETPOINT_MIN
         if raw == self._last_setpoint_raw:
             return
         try:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import logging
 import re
 import time as _time
@@ -17,9 +18,13 @@ logger = logging.getLogger(__name__)
 _HHMM_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 # Charger hardware limits
-_MIN_CHARGE_W = 1380.0
-_MAX_CHARGE_W = 11000.0
-_GRID_EXPORT_START_THRESHOLD_W = 1400.0
+_MIN_CHARGE_W = 4200.0
+_MAX_CHARGE_W = 22000.0
+
+# Eco outside-window thresholds (applied to rolling means)
+_GRID_EXPORT_START_THRESHOLD_W = -1400.0  # mean grid_power_w <= this → start charging
+_BATTERY_STOP_THRESHOLD_W = 500.0  # mean solar_battery_power_w > this → stop charging
+
 _ECO_PAUSE_HYSTERESIS_S = 60.0  # 1 minute
 _EV_SOC_STALE_S = 300.0  # 5 minutes — treat SOC as unavailable if not updated
 
@@ -89,8 +94,13 @@ class ControlLoop:
         self._ev_client = ev_client
         self._publish_queue = publish_queue
         self._config_manager = config_manager
-        self._eco_paused_at: datetime | None = None  # hysteresis: when pause condition first detected
+        self._eco_paused_at: datetime | None = None
         self._prev_ev_connected: bool = state.ev_connected
+        self._eco_charging: bool = False  # True when eco outside-window is actively charging
+
+        # Rolling sample buffers: list of (monotonic_time, value) tuples
+        self._grid_power_samples: list[tuple[float, float]] = []
+        self._battery_power_samples: list[tuple[float, float]] = []
 
     # ------------------------------------------------------------------
     # Task 6.6 — Setpoint computation
@@ -104,6 +114,37 @@ class ControlLoop:
         if (_time.monotonic() - state.ev_soc_pct_updated_at) > _EV_SOC_STALE_S:
             return None
         return state.ev_soc_pct
+
+    def _record_samples(self) -> None:
+        """Record current grid and battery power readings into rolling buffers."""
+        now = _time.monotonic()
+        if self._state.grid_power_w is not None:
+            self._grid_power_samples.append((now, self._state.grid_power_w))
+        if self._state.solar_battery_power_w is not None:
+            self._battery_power_samples.append((now, self._state.solar_battery_power_w))
+        self._prune_samples()
+
+    def _prune_samples(self) -> None:
+        """Remove samples older than the configured window."""
+        cutoff = _time.monotonic() - (self._state.eco_mean_window_minutes * 60)
+        self._grid_power_samples = [
+            (t, v) for t, v in self._grid_power_samples if t >= cutoff
+        ]
+        self._battery_power_samples = [
+            (t, v) for t, v in self._battery_power_samples if t >= cutoff
+        ]
+
+    def _mean_grid_power(self) -> float | None:
+        """Return the mean grid power over the rolling window, or None if no samples."""
+        if not self._grid_power_samples:
+            return None
+        return sum(v for _, v in self._grid_power_samples) / len(self._grid_power_samples)
+
+    def _mean_battery_power(self) -> float | None:
+        """Return the mean solar battery power over the rolling window, or None if no samples."""
+        if not self._battery_power_samples:
+            return None
+        return sum(v for _, v in self._battery_power_samples) / len(self._battery_power_samples)
 
     def _compute_setpoint(self) -> float | None:
         """Compute the charge power setpoint (watts), or None if no vehicle."""
@@ -153,46 +194,46 @@ class ControlLoop:
             return setpoint
 
         # Outside battery discharge window: charge from grid export only
+        # Use rolling means for start/stop decisions
+        mean_grid = self._mean_grid_power()
+        mean_battery = self._mean_battery_power()
+
         grid_power = state.grid_power_w if state.grid_power_w is not None else 0.0
         grid_export_w = abs(grid_power) if grid_power < 0 else 0.0
 
-        # Determine if conditions say we should pause
-        should_pause = False
+        # Start/stop logic based on rolling means
+        if not self._eco_charging:
+            # Not currently charging — check if we should start
+            if mean_grid is not None and mean_grid <= _GRID_EXPORT_START_THRESHOLD_W:
+                self._eco_charging = True
+                logger.info(
+                    "Eco outside-window: starting charge (mean grid=%.0f W, threshold=%.0f W)",
+                    mean_grid,
+                    _GRID_EXPORT_START_THRESHOLD_W,
+                )
+            else:
+                return 0.0  # not enough sustained export
 
-        if grid_export_w < _GRID_EXPORT_START_THRESHOLD_W:
-            should_pause = True
+        if self._eco_charging:
+            # Currently charging — check if we should stop
+            if mean_battery is not None and mean_battery > _BATTERY_STOP_THRESHOLD_W:
+                self._eco_charging = False
+                logger.info(
+                    "Eco outside-window: stopping charge (mean battery=%.0f W, threshold=%.0f W)",
+                    mean_battery,
+                    _BATTERY_STOP_THRESHOLD_W,
+                )
+                return 0.0
 
-        setpoint = clamp(grid_export_w, _MIN_CHARGE_W, _MAX_CHARGE_W) if not should_pause else 0.0
+        # Ramp logic: setpoint tracks instantaneous grid export, clamped to hardware limits
+        setpoint = clamp(grid_export_w, _MIN_CHARGE_W, _MAX_CHARGE_W)
 
-        if not should_pause and state.solar_battery_power_w is not None and state.solar_battery_power_w < 0:
-            # Minimise battery discharge: reduce setpoint if battery is discharging
+        # Minimise battery discharge: reduce setpoint if battery is discharging
+        if state.solar_battery_power_w is not None and state.solar_battery_power_w < 0:
             setpoint = setpoint + state.solar_battery_power_w  # negative
             if setpoint < _MIN_CHARGE_W:
-                should_pause = True
+                return 0.0
 
-        if should_pause:
-            # Conditions want us to stop — but keep charging for up to 5 minutes
-            # (hysteresis) to ride through transient dips / cloud cover.
-            now = datetime.now()  # noqa: DTZ005
-            if self._eco_paused_at is None:
-                self._eco_paused_at = now
-                logger.info("Eco outside-window: pause condition detected, starting hysteresis hold")
-
-            elapsed = (now - self._eco_paused_at).total_seconds()
-            if elapsed < _ECO_PAUSE_HYSTERESIS_S:
-                # Still within grace period — keep charging at minimum
-                logger.info(
-                    "Eco outside-window: holding charge during hysteresis (%.0f s of %.0f s)",
-                    elapsed,
-                    _ECO_PAUSE_HYSTERESIS_S,
-                )
-                return _MIN_CHARGE_W
-
-            # Grace period expired — actually stop
-            logger.info("Eco outside-window: hysteresis expired, stopping charge")
-            return 0.0
-
-        # Conditions are good — clear any pending hysteresis and charge
         self._eco_paused_at = None
         return setpoint
 
@@ -203,7 +244,8 @@ class ControlLoop:
     async def run_loop(self) -> None:
         """Periodic loop: compute setpoint, write to charger, publish state."""
         while True:
-            # logger.info(self._state)
+            # Record rolling samples for mean calculations
+            self._record_samples()
 
             # Detect EV disconnect: connected → disconnected resets Manual to Eco
             if self._prev_ev_connected and not self._state.ev_connected and self._state.charge_mode == "Manual":
