@@ -7,7 +7,7 @@ services:
     
     # Mount local config file to container
     volumes:
-      - ./config.yaml:/etc/gw-evcharger-controller/config.yaml:ro
+      - ./config.yaml:/etc/gw-evcharger-controller/config.yaml:rw
     
     # Network mode host for easier access to local network devices
     # Alternative: use bridge mode and ensure inverter is accessible
