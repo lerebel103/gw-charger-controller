@@ -20,7 +20,7 @@ _HHMM_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 _MIN_CHARGE_W = 1380.0
 _MAX_CHARGE_W = 11000.0
 _GRID_EXPORT_START_THRESHOLD_W = 1400.0
-_ECO_PAUSE_HYSTERESIS_S = 300.0  # 5 minutes
+_ECO_PAUSE_HYSTERESIS_S = 60.0  # 1 minute
 _EV_SOC_STALE_S = 300.0  # 5 minutes — treat SOC as unavailable if not updated
 
 
@@ -216,11 +216,8 @@ class ControlLoop:
 
             setpoint = self._compute_setpoint()
 
-            if setpoint is not None and setpoint > 0:
-                await self._ev_client.write_enable(True)
+            if setpoint is not None:
                 await self._ev_client.write_setpoint(setpoint)
-            else:
-                await self._ev_client.write_enable(False)
 
             self._state.commanded_setpoint_w = setpoint
 

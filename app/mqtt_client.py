@@ -472,6 +472,10 @@ class MQTTClient:
             logger.info("Victron GX connection config changed (%s), triggering reconnect", attr)
             asyncio.ensure_future(self._victron_client.reconnect())
 
+        # Ensure charger is enabled when charge mode changes
+        if attr == "charge_mode" and self._ev_client is not None:
+            asyncio.ensure_future(self._ev_client.write_enable(True))
+
     # ------------------------------------------------------------------
     # Task 8.7 — Run loop
     # ------------------------------------------------------------------
