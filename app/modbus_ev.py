@@ -221,14 +221,15 @@ class EVChargerModbusClient:
         self._state.ev_connected = cc_resp.registers[0] != 0
 
         # On rising edge (EV just connected), set Plug and Charge mode
-        if self._state.ev_connected and not self._prev_ev_connected:
-            try:
-                resp = await self._client.write_register(address=_REG_PLUG_AND_CHARGE, value=1, slave=_SLAVE_ID)
-                if resp.isError():
-                    raise ModbusException(f"Plug and Charge write error: {resp}")
-                logger.info("EV connected — set Plug and Charge mode (register 10019=1)")
-            except (ModbusException, OSError) as exc:
-                logger.warning("Failed to set Plug and Charge mode: %s", exc)
+        # TODO: Re-enable once charger behaviour is confirmed
+        # if self._state.ev_connected and not self._prev_ev_connected:
+        #     try:
+        #         resp = await self._client.write_register(address=_REG_PLUG_AND_CHARGE, value=1, slave=_SLAVE_ID)
+        #         if resp.isError():
+        #             raise ModbusException(f"Plug and Charge write error: {resp}")
+        #         logger.info("EV connected — set Plug and Charge mode (register 10019=1)")
+        #     except (ModbusException, OSError) as exc:
+        #         logger.warning("Failed to set Plug and Charge mode: %s", exc)
         self._prev_ev_connected = self._state.ev_connected
 
         # --- Compute voltage drop percentages ---
