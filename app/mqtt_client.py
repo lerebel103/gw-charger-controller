@@ -528,11 +528,14 @@ class MQTTClient:
         """Continuously drain the publish_queue and publish state snapshots."""
         assert self._client is not None  # noqa: S101
         while True:
-            snapshot: StateSnapshot = await self._publish_queue.get()
+            item = await self._publish_queue.get()
             try:
-                await self._publish_state(snapshot)
+                if item == "republish_config":
+                    await self._publish_config_state()
+                else:
+                    await self._publish_state(item)
             except aiomqtt.MqttError:
-                logger.warning("Failed to publish state snapshot")
+                logger.warning("Failed to publish from queue")
                 raise
 
     async def _process_messages(self) -> None:

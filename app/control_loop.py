@@ -207,6 +207,7 @@ class ControlLoop:
                 self._state.charge_mode = "Eco"
                 if self._config_manager is not None:
                     self._config_manager.schedule_persist(self._state)
+                self._publish_queue.put_nowait("republish_config")
             self._prev_ev_connected = self._state.ev_connected
 
             setpoint = self._compute_setpoint()

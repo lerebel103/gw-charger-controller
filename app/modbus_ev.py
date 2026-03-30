@@ -27,6 +27,7 @@ _REG_TOTAL_ENERGY = 10065
 _REG_CAR_CONNECTION = 10075
 
 # --- Write registers ---
+_REG_PLUG_AND_CHARGE = 10019  # 1 = Plug and Charge mode
 _REG_MAX_CHARGING_POWER = 10029
 _REG_CHARGER_ENABLE = 10060
 _RAW_SETPOINT_MIN = 14  # minimum raw value (= 1.4 kW)
@@ -46,6 +47,7 @@ class EVChargerModbusClient:
         self._client: AsyncModbusTcpClient | None = None
         self._connected_ip: str = ""
         self._connected_port: int = 0
+        self._prev_ev_connected: bool = False
 
     # ------------------------------------------------------------------
     # Public API
@@ -216,7 +218,18 @@ class EVChargerModbusClient:
         cc_resp = await self._client.read_holding_registers(address=_REG_CAR_CONNECTION, count=1, slave=_SLAVE_ID)
         if cc_resp.isError():
             raise ModbusException(f"EV charger car connection read error: {cc_resp}")
-        self._state.ev_connected = cc_resp.registers[0] == 2
+        self._state.ev_connected = cc_resp.registers[0] != 0
+
+        # On rising edge (EV just connected), set Plug and Charge mode
+        if self._state.ev_connected and not self._prev_ev_connected:
+            try:
+                resp = await self._client.write_register(address=_REG_PLUG_AND_CHARGE, value=1, slave=_SLAVE_ID)
+                if resp.isError():
+                    raise ModbusException(f"Plug and Charge write error: {resp}")
+                logger.info("EV connected — set Plug and Charge mode (register 10019=1)")
+            except (ModbusException, OSError) as exc:
+                logger.warning("Failed to set Plug and Charge mode: %s", exc)
+        self._prev_ev_connected = self._state.ev_connected
 
         # --- Compute voltage drop percentages ---
         self._compute_voltage_drops()
