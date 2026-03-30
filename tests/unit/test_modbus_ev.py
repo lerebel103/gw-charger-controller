@@ -266,7 +266,7 @@ class TestEVChargerModbusClient:
 
         await ec.write_enable(True)
 
-        mock_client.write_register.assert_called_once_with(address=10060, value=1, slave=247)
+        mock_client.write_register.assert_called_once_with(address=10060, value=2, slave=247)
 
     @pytest.mark.asyncio
     async def test_write_enable_false_writes_0(self):
@@ -283,7 +283,7 @@ class TestEVChargerModbusClient:
 
         await ec.write_enable(False)
 
-        mock_client.write_register.assert_called_once_with(address=10060, value=0, slave=247)
+        mock_client.write_register.assert_called_once_with(address=10060, value=1, slave=247)
 
     @pytest.mark.asyncio
     async def test_write_enable_skips_when_modbus_disconnected(self):

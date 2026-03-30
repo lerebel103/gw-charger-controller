@@ -48,6 +48,8 @@ class EVChargerModbusClient:
         self._connected_ip: str = ""
         self._connected_port: int = 0
         self._prev_ev_connected: bool = False
+        self._last_setpoint_raw: int | None = None
+        self._last_enable_value: int | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -85,10 +87,13 @@ class EVChargerModbusClient:
             return
 
         raw = max(_RAW_SETPOINT_MIN, round(power_w / 100))
+        if raw == self._last_setpoint_raw:
+            return  # unchanged — skip write to reduce flash wear
         try:
             resp = await self._client.write_register(address=_REG_MAX_CHARGING_POWER, value=raw, slave=_SLAVE_ID)
             if resp.isError():
                 raise ModbusException(f"Setpoint write error: {resp}")
+            self._last_setpoint_raw = raw
             logger.info("Wrote charging setpoint raw=%d (%.0f W)", raw, power_w)
         except (ModbusException, OSError) as exc:
             logger.warning("EV charger setpoint write failed: %s", exc)
@@ -107,11 +112,14 @@ class EVChargerModbusClient:
             logger.warning("write_enable skipped: EV not connected")
             return
 
-        value = 1 if enable else 0
+        value = 2 if enable else 1
+        if value == self._last_enable_value:
+            return  # unchanged — skip write to reduce flash wear
         try:
             resp = await self._client.write_register(address=_REG_CHARGER_ENABLE, value=value, slave=_SLAVE_ID)
             if resp.isError():
                 raise ModbusException(f"Charger enable write error: {resp}")
+            self._last_enable_value = value
             logger.info("Wrote charger enable=%d", value)
         except (ModbusException, OSError) as exc:
             logger.warning("EV charger enable write failed: %s", exc)
@@ -119,6 +127,8 @@ class EVChargerModbusClient:
     async def reconnect(self) -> None:
         """Close existing connection and reconnect with exponential backoff."""
         await self._close()
+        self._last_setpoint_raw = None
+        self._last_enable_value = None
 
         ip = self._state.ev_charger_ip
         port = self._state.ev_charger_port
@@ -221,15 +231,14 @@ class EVChargerModbusClient:
         self._state.ev_connected = cc_resp.registers[0] != 0
 
         # On rising edge (EV just connected), set Plug and Charge mode
-        # TODO: Re-enable once charger behaviour is confirmed
-        # if self._state.ev_connected and not self._prev_ev_connected:
-        #     try:
-        #         resp = await self._client.write_register(address=_REG_PLUG_AND_CHARGE, value=1, slave=_SLAVE_ID)
-        #         if resp.isError():
-        #             raise ModbusException(f"Plug and Charge write error: {resp}")
-        #         logger.info("EV connected — set Plug and Charge mode (register 10019=1)")
-        #     except (ModbusException, OSError) as exc:
-        #         logger.warning("Failed to set Plug and Charge mode: %s", exc)
+        if self._state.ev_connected and not self._prev_ev_connected:
+            try:
+                resp = await self._client.write_register(address=_REG_PLUG_AND_CHARGE, value=1, slave=_SLAVE_ID)
+                if resp.isError():
+                    raise ModbusException(f"Plug and Charge write error: {resp}")
+                logger.info("EV connected — set Plug and Charge mode (register 10019=1)")
+            except (ModbusException, OSError) as exc:
+                logger.warning("Failed to set Plug and Charge mode: %s", exc)
         self._prev_ev_connected = self._state.ev_connected
 
         # --- Compute voltage drop percentages ---

@@ -121,17 +121,21 @@ class ControlLoop:
         # --- Eco mode ---
         if is_within_discharge_window(state):
             self._eco_paused_at = None
-            # Inside battery discharge window — three-part logic
+            # Inside battery discharge window
             at_floor = (
                 state.solar_battery_soc_pct is not None
                 and state.solar_battery_soc_pct <= state.solar_battery_discharge_floor_pct
             )
 
-            # Check if EV SOC is fresh (updated within _EV_SOC_STALE_S)
-            ev_soc = self._get_ev_soc()
-            if at_floor and ev_soc is not None and ev_soc >= state.ev_min_soc_pct:
-                return 0.0  # EV has reached minimum SOC — stop charging
-            # If at floor but EV SOC unknown or below minimum — continue charging
+            if at_floor:
+                ev_soc = self._get_ev_soc()
+                if ev_soc is not None and ev_soc < state.ev_min_soc_pct:
+                    # EV hasn't reached target — keep charging (grid import will occur)
+                    pass
+                else:
+                    # EV SOC unavailable → stop (conservative)
+                    # EV SOC >= min → stop (target reached)
+                    return 0.0
 
             setpoint = clamp(state.solar_battery_max_ev_charge_power_w, _MIN_CHARGE_W, _MAX_CHARGE_W)
 
@@ -213,12 +217,10 @@ class ControlLoop:
             setpoint = self._compute_setpoint()
 
             if setpoint is not None and setpoint > 0:
-                # TODO: Re-enable once charger behaviour is confirmed
-                # await self._ev_client.write_enable(True)
+                await self._ev_client.write_enable(True)
                 await self._ev_client.write_setpoint(setpoint)
             else:
-                # await self._ev_client.write_enable(False)
-                pass
+                await self._ev_client.write_enable(False)
 
             self._state.commanded_setpoint_w = setpoint
 
