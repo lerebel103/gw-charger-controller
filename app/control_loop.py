@@ -242,6 +242,17 @@ class ControlLoop:
         - Below minimum: pause
         """
         state = self._state
+
+        # SOC gate: don't charge EV until battery is above threshold
+        if state.solar_battery_soc_pct is not None and state.solar_battery_soc_pct < state.eco_day_min_battery_soc_pct:
+            if self._eco_charging:
+                logger.info(
+                    "Eco day: pausing charge (battery SOC %.0f%% < threshold %.0f%%)",
+                    state.solar_battery_soc_pct, state.eco_day_min_battery_soc_pct,
+                )
+                self._eco_charging = False
+            return 0.0
+
         mean_grid = self._mean_grid_power()
         mean_battery = self._mean_battery_power()
 
@@ -265,11 +276,15 @@ class ControlLoop:
             )
             return 0.0
 
-        # Ramp: probe available solar capacity using battery feedback
+        # Ramp: probe available solar capacity using battery feedback.
+        # Battery SOC gate above ensures the battery is nearly full before
+        # we get here, so the ramp just needs to avoid discharging it.
         battery_power = state.solar_battery_power_w
         if battery_power is not None and battery_power < 0:
+            # Battery is discharging — reduce setpoint by the discharge amount
             self._eco_day_setpoint_w += battery_power  # negative, reduces
         else:
+            # Battery is charging or idle — solar has headroom, ramp up
             self._eco_day_setpoint_w += _ECO_DAY_RAMP_STEP_W
 
         self._eco_day_setpoint_w = clamp(self._eco_day_setpoint_w, _MIN_CHARGE_W, _MAX_CHARGE_W)

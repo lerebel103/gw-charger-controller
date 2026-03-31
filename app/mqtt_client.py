@@ -214,6 +214,15 @@ ENTITIES: list[dict[str, Any]] = [
         100,
         "W",
     ),
+    _number(
+        "ev_charger_eco_day_min_batt_soc",
+        "Eco Day Min Batt SOC",
+        "eco_day_min_batt_soc",
+        0,
+        100,
+        1,
+        "%",
+    ),
     # Text
     _text("ev_charger_solar_battery_discharge_start", "Solar Batt Discharge Start", "solar_battery_discharge_start"),
     _text("ev_charger_solar_battery_discharge_end", "Solar Batt Discharge End", "solar_battery_discharge_end"),
@@ -241,6 +250,7 @@ _COMMAND_MAP: dict[str, tuple[str, str]] = {
     f"{_PREFIX}/number/control_loop_interval/set": ("control_loop_interval_s", "float"),
     f"{_PREFIX}/number/eco_mean_window/set": ("eco_mean_window_minutes", "int"),
     f"{_PREFIX}/number/solar_batt_day_limit/set": ("solar_battery_day_power_limit_w", "float"),
+    f"{_PREFIX}/number/eco_day_min_batt_soc/set": ("eco_day_min_battery_soc_pct", "float"),
     f"{_PREFIX}/text/solar_battery_discharge_start/set": ("solar_battery_discharge_start", "hhmm"),
     f"{_PREFIX}/text/solar_battery_discharge_end/set": ("solar_battery_discharge_end", "hhmm"),
     f"{_PREFIX}/text/ev_charger_ip/set": ("ev_charger_ip", "str"),
@@ -260,6 +270,7 @@ _NUMBER_RANGES: dict[str, tuple[float, float]] = {
     "control_loop_interval_s": (1, 60),
     "eco_mean_window_minutes": (1, 10),
     "solar_battery_day_power_limit_w": (-10000, 0),
+    "eco_day_min_battery_soc_pct": (0, 100),
 }
 
 # Select entity valid options
@@ -396,6 +407,7 @@ class MQTTClient:
             (f"{_PREFIX}/number/control_loop_interval/state", str(s.control_loop_interval_s)),
             (f"{_PREFIX}/number/eco_mean_window/state", str(s.eco_mean_window_minutes)),
             (f"{_PREFIX}/number/solar_batt_day_limit/state", str(s.solar_battery_day_power_limit_w)),
+            (f"{_PREFIX}/number/eco_day_min_batt_soc/state", str(s.eco_day_min_battery_soc_pct)),
             (f"{_PREFIX}/text/solar_battery_discharge_start/state", s.solar_battery_discharge_start),
             (f"{_PREFIX}/text/solar_battery_discharge_end/state", s.solar_battery_discharge_end),
             (f"{_PREFIX}/text/ev_charger_ip/state", s.ev_charger_ip),
