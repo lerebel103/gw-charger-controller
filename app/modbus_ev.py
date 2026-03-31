@@ -27,9 +27,10 @@ _REG_TOTAL_ENERGY = 10065
 _REG_CAR_CONNECTION = 10075
 
 # --- Write registers ---
+_REG_PLUG_AND_CHARGE = 10019
 _REG_MAX_CHARGING_POWER = 10029
 _REG_CHARGER_ENABLE = 10060
-_RAW_SETPOINT_MIN = 42  # minimum raw value (= 4.2 kW); 0 is also valid (pause)
+_RAW_SETPOINT_MIN = 44  # minimum raw value (= 4.4 kW); 0 is also valid (pause)
 
 
 class EVChargerModbusClient:
@@ -145,20 +146,33 @@ class EVChargerModbusClient:
         except (ModbusException, OSError) as exc:
             logger.warning("EV charger setpoint write failed: %s", exc)
 
-    async def ensure_enabled(self) -> None:
-        """Ensure the charger is enabled. Writes register 10060=2 if not already enabled."""
-        if self._state.ev_charger_enabled:
+    async def ensure_plug_and_charge(self) -> None:
+        """Ensure plug-and-charge is enabled. Writes register 10019=1 if not already set."""
+        if self._state.ev_plug_and_charge:
             return
         if not self.connected:
             return
         try:
-            resp = await self._client.write_register(address=_REG_CHARGER_ENABLE, value=2, slave=_SLAVE_ID)
+            resp = await self._client.write_register(address=_REG_PLUG_AND_CHARGE, value=1, slave=_SLAVE_ID)
             if resp.isError():
-                raise ModbusException(f"Charger enable write error: {resp}")
-            self._state.ev_charger_enabled = True
-            logger.info("Charger was disabled — re-enabled (register 10060=2)")
+                raise ModbusException(f"Plug and charge write error: {resp}")
+            self._state.ev_plug_and_charge = True
+            logger.info("Plug and charge was disabled — enabled (register 10019=1)")
         except (ModbusException, OSError) as exc:
-            logger.warning("Failed to enable charger: %s", exc)
+            logger.warning("Failed to enable plug and charge: %s", exc)
+
+    async def ensure_enabled(self) -> None:
+        """Write register 10060=2 every cycle to keep the charger enabled.
+
+        This register is a command register that does not hold state,
+        so we write unconditionally each iteration.
+        """
+        if not self.connected:
+            return
+        try:
+            await self._client.write_register(address=_REG_CHARGER_ENABLE, value=2, slave=_SLAVE_ID)
+        except (ModbusException, OSError) as exc:
+            logger.warning("Failed to write charger enable: %s", exc)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -225,11 +239,12 @@ class EVChargerModbusClient:
             raise ModbusException(f"EV charger car connection read error: {cc_resp}")
         self._state.ev_connected = cc_resp.registers[0] != 0
 
-        # Charger enable state (register 10060)
-        en_resp = await self._client.read_holding_registers(address=_REG_CHARGER_ENABLE, count=1, slave=_SLAVE_ID)
-        if en_resp.isError():
-            raise ModbusException(f"EV charger enable state read error: {en_resp}")
-        self._state.ev_charger_enabled = en_resp.registers[0] == 2
+        # Plug and charge state (register 10019)
+        pnc_resp = await self._client.read_holding_registers(address=_REG_PLUG_AND_CHARGE, count=1, slave=_SLAVE_ID)
+        if pnc_resp.isError():
+            raise ModbusException(f"EV charger plug and charge read error: {pnc_resp}")
+        self._state.ev_plug_and_charge = pnc_resp.registers[0] == 1
+
 
         # Current setpoint (register 10029)
         sp_resp = await self._client.read_holding_registers(address=_REG_MAX_CHARGING_POWER, count=1, slave=_SLAVE_ID)

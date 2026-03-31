@@ -92,7 +92,7 @@ This can be automated from Home Assistant using an automation that publishes the
 
 ## Hardware
 
-- **EV Charger**: GoodWe GW22K-HCA-20 (Modbus TCP, slave ID 247, setpoint range 4200–22000 W or 0 for pause)
+- **EV Charger**: GoodWe GW22K-HCA-20 (Modbus TCP, slave ID 247, setpoint range 4400–22000 W or 0 for pause). Note: the documented minimum is 4200 W (raw 42) but in practice the charger rejects values below 4400 W (raw 44).
 - **Inverter/Battery**: Victron GX (Modbus TCP, unit ID 100 for system, configurable for grid meter)
 
 ## License

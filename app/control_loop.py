@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 _HHMM_RE = re.compile(r"^(\d{1,2}):([0-5]\d)$")
 
 # Charger hardware limits
-_MIN_CHARGE_W = 4200.0
+_MIN_CHARGE_W = 4400.0
 _MAX_CHARGE_W = 22000.0
 
 # Eco outside-window thresholds (applied to rolling means)
@@ -346,6 +346,7 @@ class ControlLoop:
             # 4. Compute setpoint, ensure charger enabled, write
             setpoint = self._compute_setpoint()
             if self._state.ev_connected:
+                # await self._ev_client.ensure_plug_and_charge()
                 await self._ev_client.ensure_enabled()
             await self._ev_client.write_setpoint(setpoint)
             self._state.commanded_setpoint_w = setpoint

@@ -109,7 +109,7 @@ class TestEVChargerModbusClient:
         # Charger enable state = 2 (enabled)
         en_resp = _make_response([2])
 
-        mock_client.read_holding_registers = AsyncMock(side_effect=[main_resp, ct_resp, te_resp, cc_resp, en_resp, _make_response([0])])
+        mock_client.read_holding_registers = AsyncMock(side_effect=[main_resp, ct_resp, te_resp, cc_resp, _make_response([1]), en_resp, _make_response([0])])
 
         await ec._read_registers()
 
@@ -143,7 +143,7 @@ class TestEVChargerModbusClient:
         te_resp = _make_response([0, 0])
         cc_resp = _make_response([0])  # disconnected
 
-        mock_client.read_holding_registers = AsyncMock(side_effect=[main_resp, ct_resp, te_resp, cc_resp, _make_response([2]), _make_response([0])])
+        mock_client.read_holding_registers = AsyncMock(side_effect=[main_resp, ct_resp, te_resp, cc_resp, _make_response([1]), _make_response([2]), _make_response([0])])
 
         await ec._read_registers()
         assert state.ev_connected is False
@@ -191,7 +191,7 @@ class TestEVChargerModbusClient:
         te_resp = _make_response([0, 0])
         cc_resp = _make_error_response()
 
-        mock_client.read_holding_registers = AsyncMock(side_effect=[main_resp, ct_resp, te_resp, cc_resp, _make_response([2]), _make_response([0])])
+        mock_client.read_holding_registers = AsyncMock(side_effect=[main_resp, ct_resp, te_resp, cc_resp, _make_response([1]), _make_response([2]), _make_response([0])])
 
         from pymodbus.exceptions import ModbusException
 
@@ -213,7 +213,7 @@ class TestEVChargerModbusClient:
         te_resp = _make_response([0, 0])
         cc_resp = _make_response([2])
 
-        mock_client.read_holding_registers = AsyncMock(side_effect=[main_resp, ct_resp, te_resp, cc_resp, _make_response([2]), _make_response([0])])
+        mock_client.read_holding_registers = AsyncMock(side_effect=[main_resp, ct_resp, te_resp, cc_resp, _make_response([1]), _make_response([2]), _make_response([0])])
 
         await ec._read_registers()
 
@@ -237,7 +237,7 @@ class TestEVChargerModbusClient:
         te_resp = _make_response([0, 1500])
         cc_resp = _make_response([2])
 
-        mock_client.read_holding_registers = AsyncMock(side_effect=[main_resp, ct_resp, te_resp, cc_resp, _make_response([2]), _make_response([0])])
+        mock_client.read_holding_registers = AsyncMock(side_effect=[main_resp, ct_resp, te_resp, cc_resp, _make_response([1]), _make_response([2]), _make_response([0])])
 
         await ec._read_registers()
         assert state.ev_total_energy_wh == 150000.0
@@ -256,7 +256,7 @@ class TestEVChargerModbusClient:
         te_resp = _make_response([1, 0])
         cc_resp = _make_response([2])
 
-        mock_client.read_holding_registers = AsyncMock(side_effect=[main_resp, ct_resp, te_resp, cc_resp, _make_response([2]), _make_response([0])])
+        mock_client.read_holding_registers = AsyncMock(side_effect=[main_resp, ct_resp, te_resp, cc_resp, _make_response([1]), _make_response([2]), _make_response([0])])
 
         await ec._read_registers()
         assert state.ev_total_energy_wh == 6553600.0
@@ -294,7 +294,7 @@ class TestEVChargerModbusClient:
         # 500W → raw = round(500/100) = 5, but min is 42 (4.2 kW)
         await ec.write_setpoint(500)
 
-        mock_client.write_register.assert_called_once_with(address=10029, value=42, slave=247)
+        mock_client.write_register.assert_called_once_with(address=10029, value=44, slave=247)
 
     @pytest.mark.asyncio
     async def test_write_setpoint_skips_when_not_connected(self):

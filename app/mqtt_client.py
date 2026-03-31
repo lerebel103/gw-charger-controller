@@ -155,14 +155,14 @@ ENTITIES: list[dict[str, Any]] = [
     # Select
     _select("ev_charger_mode", "Charge Mode", "mode", ["Eco", "Manual", "Standby"]),
     # Numbers
-    _number("ev_charger_manual_power", "Manual Charge Power", "manual_power", 4200, 11000, 100, "W"),
+    _number("ev_charger_manual_power", "Manual Charge Power", "manual_power", 4400, 11000, 100, "W"),
     _number("ev_charger_ev_min_soc", "Min EV SOC", "ev_min_soc", 0, 100, 1, "%"),
     _number("ev_charger_solar_battery_floor", "Solar Batt Discharge Floor", "solar_battery_floor", 0, 100, 1, "%"),
     _number(
         "ev_charger_solar_battery_max_ev_charge",
         "EV Charge Power (Batt Window)",
         "solar_battery_max_ev_charge",
-        4200,
+        4400,
         11000,
         100,
         "W",
@@ -259,10 +259,10 @@ _COMMAND_MAP: dict[str, tuple[str, str]] = {
 
 # Number entity ranges for validation: state_attr → (min, max)
 _NUMBER_RANGES: dict[str, tuple[float, float]] = {
-    "manual_power_w": (4200, 11000),
+    "manual_power_w": (4400, 11000),
     "ev_min_soc_pct": (0, 100),
     "solar_battery_discharge_floor_pct": (0, 100),
-    "solar_battery_max_ev_charge_power_w": (4200, 11000),
+    "solar_battery_max_ev_charge_power_w": (4400, 11000),
     "solar_battery_max_discharge_w": (0, 15000),
     "ev_charger_port": (1, 65535),
     "victron_port": (1, 65535),

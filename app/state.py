@@ -31,7 +31,7 @@ class AppState:
     ev_current_c: float | None = None
     ev_completion_time_h: int | None = None
     ev_total_energy_wh: float | None = None
-    ev_charger_enabled: bool = False  # register 10060: True when value == 2
+    ev_plug_and_charge: bool = False  # register 10019: True when value == 1
     ev_charger_setpoint_raw: int | None = None  # register 10029: current setpoint as read from charger
     ev_soc_pct: float | None = None
     ev_soc_pct_updated_at: float | None = None  # time.monotonic() of last SOC update
