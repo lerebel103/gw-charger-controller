@@ -31,6 +31,8 @@ class AppState:
     ev_current_c: float | None = None
     ev_completion_time_h: int | None = None
     ev_total_energy_wh: float | None = None
+    ev_charger_enabled: bool = False  # register 10060: True when value == 2
+    ev_charger_setpoint_raw: int | None = None  # register 10029: current setpoint as read from charger
     ev_soc_pct: float | None = None
     ev_soc_pct_updated_at: float | None = None  # time.monotonic() of last SOC update
 
@@ -51,8 +53,9 @@ class AppState:
     solar_battery_discharge_end: str = "06:00"
     solar_battery_max_ev_charge_power_w: float = 5000.0
     solar_battery_max_discharge_w: float = 6000.0
-    control_loop_interval_s: float = 5.0
+    control_loop_interval_s: float = 10.0
     eco_mean_window_minutes: int = 5  # rolling average window for eco start/stop decisions (1–10 min)
+    solar_battery_day_power_limit_w: float = -500.0  # stop EV charging when mean battery power drops below this (W, negative = discharging)
 
     # Device connection config
     ev_charger_ip: str = ""
@@ -80,6 +83,7 @@ PERSISTED_FIELDS: set[str] = {
     "solar_battery_max_discharge_w",
     "control_loop_interval_s",
     "eco_mean_window_minutes",
+    "solar_battery_day_power_limit_w",
     "ev_charger_ip",
     "ev_charger_port",
     "victron_ip",

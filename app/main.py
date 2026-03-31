@@ -46,7 +46,9 @@ async def _async_main(config_path: str) -> None:
 
     victron_client = VictronModbusClient(state)
     ev_client = EVChargerModbusClient(state)
-    control_loop = ControlLoop(state, ev_client, publish_queue, config_manager=config_manager)
+    control_loop = ControlLoop(
+        state, victron_client, ev_client, publish_queue, config_manager=config_manager
+    )
     mqtt_client = MQTTClient(
         state,
         config_manager,
@@ -66,8 +68,6 @@ async def _async_main(config_path: str) -> None:
         loop.add_signal_handler(sig, _signal_handler)
 
     tasks = [
-        asyncio.create_task(_supervised(victron_client.poll_loop, "victron_client"), name="victron"),
-        asyncio.create_task(_supervised(ev_client.poll_loop, "ev_client"), name="ev"),
         asyncio.create_task(_supervised(control_loop.run_loop, "control_loop"), name="control"),
         asyncio.create_task(_supervised(mqtt_client.run_loop, "mqtt_client"), name="mqtt"),
         asyncio.create_task(_supervised(config_manager.flush_loop, "config_flush"), name="flush"),

@@ -12,7 +12,7 @@ import aiomqtt
 
 from app.backoff import exponential_backoff
 from app.config import ConfigManager
-from app.control_loop import validate_hhmm
+from app.control_loop import normalise_hhmm, validate_hhmm
 from app.state import AppState, StateSnapshot
 
 logger = logging.getLogger(__name__)
@@ -155,21 +155,21 @@ ENTITIES: list[dict[str, Any]] = [
     # Select
     _select("ev_charger_mode", "Charge Mode", "mode", ["Eco", "Manual", "Standby"]),
     # Numbers
-    _number("ev_charger_manual_power", "Manual Charge Power", "manual_power", 4200, 22000, 100, "W"),
+    _number("ev_charger_manual_power", "Manual Charge Power", "manual_power", 4200, 11000, 100, "W"),
     _number("ev_charger_ev_min_soc", "Min EV SOC", "ev_min_soc", 0, 100, 1, "%"),
-    _number("ev_charger_solar_battery_floor", "Solar Battery Discharge Floor", "solar_battery_floor", 0, 100, 1, "%"),
+    _number("ev_charger_solar_battery_floor", "Solar Batt Discharge Floor", "solar_battery_floor", 0, 100, 1, "%"),
     _number(
         "ev_charger_solar_battery_max_ev_charge",
-        "EV Charge Power (Battery Window)",
+        "EV Charge Power (Batt Window)",
         "solar_battery_max_ev_charge",
         4200,
-        22000,
+        11000,
         100,
         "W",
     ),
     _number(
         "ev_charger_solar_battery_max_discharge",
-        "Solar Battery Max Discharge",
+        "Solar Batt Max Discharge",
         "solar_battery_max_discharge",
         0,
         15000,
@@ -205,9 +205,18 @@ ENTITIES: list[dict[str, Any]] = [
         1,
         "min",
     ),
+    _number(
+        "ev_charger_solar_batt_day_limit",
+        "Solar Batt Pwr Lim (day)",
+        "solar_batt_day_limit",
+        -10000,
+        0,
+        100,
+        "W",
+    ),
     # Text
-    _text("ev_charger_solar_battery_discharge_start", "Solar Battery Discharge Start", "solar_battery_discharge_start"),
-    _text("ev_charger_solar_battery_discharge_end", "Solar Battery Discharge End", "solar_battery_discharge_end"),
+    _text("ev_charger_solar_battery_discharge_start", "Solar Batt Discharge Start", "solar_battery_discharge_start"),
+    _text("ev_charger_solar_battery_discharge_end", "Solar Batt Discharge End", "solar_battery_discharge_end"),
     _text("ev_charger_ip", "EV Charger IP", "ev_charger_ip"),
     _text("victron_ip", "Victron GX IP", "victron_ip"),
 ]
@@ -231,6 +240,7 @@ _COMMAND_MAP: dict[str, tuple[str, str]] = {
     f"{_PREFIX}/number/victron_grid_meter_unit_id/set": ("victron_grid_meter_unit_id", "int"),
     f"{_PREFIX}/number/control_loop_interval/set": ("control_loop_interval_s", "float"),
     f"{_PREFIX}/number/eco_mean_window/set": ("eco_mean_window_minutes", "int"),
+    f"{_PREFIX}/number/solar_batt_day_limit/set": ("solar_battery_day_power_limit_w", "float"),
     f"{_PREFIX}/text/solar_battery_discharge_start/set": ("solar_battery_discharge_start", "hhmm"),
     f"{_PREFIX}/text/solar_battery_discharge_end/set": ("solar_battery_discharge_end", "hhmm"),
     f"{_PREFIX}/text/ev_charger_ip/set": ("ev_charger_ip", "str"),
@@ -239,16 +249,17 @@ _COMMAND_MAP: dict[str, tuple[str, str]] = {
 
 # Number entity ranges for validation: state_attr → (min, max)
 _NUMBER_RANGES: dict[str, tuple[float, float]] = {
-    "manual_power_w": (4200, 22000),
+    "manual_power_w": (4200, 11000),
     "ev_min_soc_pct": (0, 100),
     "solar_battery_discharge_floor_pct": (0, 100),
-    "solar_battery_max_ev_charge_power_w": (4200, 22000),
+    "solar_battery_max_ev_charge_power_w": (4200, 11000),
     "solar_battery_max_discharge_w": (0, 15000),
     "ev_charger_port": (1, 65535),
     "victron_port": (1, 65535),
     "victron_grid_meter_unit_id": (1, 247),
     "control_loop_interval_s": (1, 60),
     "eco_mean_window_minutes": (1, 10),
+    "solar_battery_day_power_limit_w": (-10000, 0),
 }
 
 # Select entity valid options
@@ -384,6 +395,7 @@ class MQTTClient:
             (f"{_PREFIX}/number/victron_grid_meter_unit_id/state", str(s.victron_grid_meter_unit_id)),
             (f"{_PREFIX}/number/control_loop_interval/state", str(s.control_loop_interval_s)),
             (f"{_PREFIX}/number/eco_mean_window/state", str(s.eco_mean_window_minutes)),
+            (f"{_PREFIX}/number/solar_batt_day_limit/state", str(s.solar_battery_day_power_limit_w)),
             (f"{_PREFIX}/text/solar_battery_discharge_start/state", s.solar_battery_discharge_start),
             (f"{_PREFIX}/text/solar_battery_discharge_end/state", s.solar_battery_discharge_end),
             (f"{_PREFIX}/text/ev_charger_ip/state", s.ev_charger_ip),
@@ -433,7 +445,7 @@ class MQTTClient:
             if not validate_hhmm(payload):
                 logger.error("Invalid HH:MM value '%s' for %s, retaining previous value", payload, attr)
                 return
-            setattr(self._state, attr, payload)
+            setattr(self._state, attr, normalise_hhmm(payload))
 
         elif vtype == "float":
             try:
@@ -483,10 +495,6 @@ class MQTTClient:
         if attr in _VICTRON_RECONNECT_FIELDS and self._victron_client is not None:
             logger.info("Victron GX connection config changed (%s), triggering reconnect", attr)
             asyncio.ensure_future(self._victron_client.reconnect())
-
-        # Ensure charger is enabled when charge mode changes
-        if attr == "charge_mode" and self._ev_client is not None:
-            asyncio.ensure_future(self._ev_client.write_enable(True))
 
     # ------------------------------------------------------------------
     # Task 8.7 — Run loop

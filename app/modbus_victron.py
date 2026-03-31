@@ -36,97 +36,87 @@ def _uint16_to_int16(value: int) -> int:
 
 
 class VictronModbusClient:
-    """Async Modbus TCP client for the Victron GX device.
+    """Modbus TCP client for the Victron GX device.
 
-    Reads grid power (L1+L2+L3), battery power, battery SOC, and grid
-    voltages at a configurable interval.  Reconnects with exponential
-    backoff on failure and when the target IP/port changes.
+    Provides ``ensure_connected()`` and ``read()`` methods called by the
+    control loop each iteration.  Does not run its own async task.
     """
 
-    def __init__(self, state: AppState, poll_interval_s: float = 5.0) -> None:
+    def __init__(self, state: AppState) -> None:
         self._state = state
-        self._poll_interval_s = poll_interval_s
         self._client: AsyncModbusTcpClient | None = None
         self._connected_ip: str = ""
         self._connected_port: int = 0
+        self._reconnect_attempt: int = 0
+        self._reconnect_after: float = 0.0  # monotonic time to wait until
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+    @property
+    def connected(self) -> bool:
+        return self._client is not None and self._client.connected
 
-    async def poll_loop(self) -> None:
-        """Run the polling loop as an asyncio task."""
-        while True:
-            # Reconnect if IP/port changed or not connected
-            if self._needs_reconnect():
-                await self.reconnect()
+    async def ensure_connected(self) -> None:
+        """Check connection and reconnect if needed. Non-blocking single attempt."""
+        if self.connected and not self._config_changed():
+            return
 
-            if self._client is not None and self._client.connected:
-                try:
-                    await self._read_registers()
-                except (ModbusException, OSError) as exc:
-                    logger.warning("Victron GX read failed: %s", exc)
-                    await self._close()
-                    await self.reconnect()
-
-            await asyncio.sleep(self._poll_interval_s)
-
-    async def reconnect(self) -> None:
-        """Close existing connection and reconnect with exponential backoff."""
-        await self._close()
+        if self._config_changed():
+            await self._close()
 
         ip = self._state.victron_ip
         port = self._state.victron_port
-
         if not ip:
-            logger.warning("Victron GX IP not configured, skipping connection")
             return
 
-        attempt = 0
-        while True:
-            try:
-                client = AsyncModbusTcpClient(ip, port=port)
-                connected = await client.connect()
-                if connected:
-                    self._client = client
-                    self._connected_ip = ip
-                    self._connected_port = port
-                    logger.info("Connected to Victron GX at %s:%d", ip, port)
-                    return
-                else:
-                    logger.warning("Victron GX connection to %s:%d returned False", ip, port)
-            except (OSError, ModbusException) as exc:
-                logger.warning(
-                    "Victron GX connection attempt %d to %s:%d failed: %s",
-                    attempt,
-                    ip,
-                    port,
-                    exc,
-                )
+        # Respect backoff timing
+        import time as _t
+        now = _t.monotonic()
+        if now < self._reconnect_after:
+            return
 
-            delay = exponential_backoff(attempt)
-            logger.info("Retrying Victron GX connection in %.1f s", delay)
-            await asyncio.sleep(delay)
-            attempt += 1
+        try:
+            client = AsyncModbusTcpClient(ip, port=port)
+            connected = await client.connect()
+            if connected:
+                self._client = client
+                self._connected_ip = ip
+                self._connected_port = port
+                self._reconnect_attempt = 0
+                logger.info("Connected to Victron GX at %s:%d", ip, port)
+            else:
+                self._schedule_retry()
+        except (OSError, ModbusException) as exc:
+            logger.warning("Victron GX connection failed: %s", exc)
+            self._schedule_retry()
 
-            # If IP/port changed while we were waiting, restart with new target
-            if self._state.victron_ip != ip or self._state.victron_port != port:
-                ip = self._state.victron_ip
-                port = self._state.victron_port
-                attempt = 0
+    async def read(self) -> None:
+        """Read all registers and update AppState. Closes connection on error."""
+        if not self.connected:
+            return
+        try:
+            await self._read_registers()
+        except (ModbusException, OSError) as exc:
+            logger.warning("Victron GX read failed: %s", exc)
+            await self._close()
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
+    async def reconnect(self) -> None:
+        """Force a reconnect (e.g. after IP/port change via MQTT)."""
+        await self._close()
+        self._reconnect_attempt = 0
+        self._reconnect_after = 0.0
 
-    def _needs_reconnect(self) -> bool:
-        """Check whether a reconnect is needed."""
-        if self._client is None or not self._client.connected:
-            return True
-        return self._state.victron_ip != self._connected_ip or self._state.victron_port != self._connected_port
+    def _config_changed(self) -> bool:
+        return (
+            self._state.victron_ip != self._connected_ip
+            or self._state.victron_port != self._connected_port
+        )
+
+    def _schedule_retry(self) -> None:
+        import time as _t
+        delay = exponential_backoff(self._reconnect_attempt)
+        self._reconnect_after = _t.monotonic() + delay
+        self._reconnect_attempt += 1
 
     async def _close(self) -> None:
-        """Close the current Modbus connection if open."""
         if self._client is not None:
             self._client.close()
             self._client = None
@@ -135,38 +125,30 @@ class VictronModbusClient:
         """Read system and grid meter registers and update AppState."""
         assert self._client is not None  # noqa: S101
 
-        # --- System registers (unit ID 100) ---
-        # Read 820..822 (3 registers) for grid power
         grid_resp = await self._client.read_holding_registers(
             address=_REG_GRID_L1_POWER, count=3, slave=_SYSTEM_UNIT_ID
         )
         if grid_resp.isError():
             raise ModbusException(f"Grid power read error: {grid_resp}")
 
-        # Read 842..843 (2 registers) for battery power + SOC
         batt_resp = await self._client.read_holding_registers(
             address=_REG_BATTERY_POWER, count=2, slave=_SYSTEM_UNIT_ID
         )
         if batt_resp.isError():
             raise ModbusException(f"Battery read error: {batt_resp}")
 
-        # Parse system registers
         grid_l1 = _uint16_to_int16(grid_resp.registers[0])
         grid_l2 = _uint16_to_int16(grid_resp.registers[1])
         grid_l3 = _uint16_to_int16(grid_resp.registers[2])
-
-        battery_power = _uint16_to_int16(batt_resp.registers[0])  # int16, W
-        battery_soc = batt_resp.registers[1]  # uint16, %
+        battery_power = _uint16_to_int16(batt_resp.registers[0])
+        battery_soc = batt_resp.registers[1]
 
         self._state.grid_power_w = float(grid_l1 + grid_l2 + grid_l3)
         self._state.solar_battery_power_w = float(battery_power)
         self._state.solar_battery_soc_pct = float(battery_soc)
 
-        # --- Grid meter voltage registers (configurable unit ID) ---
         grid_meter_unit = self._state.victron_grid_meter_unit_id
 
-        # Registers 2616, 2618, 2620 are not contiguous (gap at 2617, 2619)
-        # Read them individually
         v1_resp = await self._client.read_holding_registers(
             address=_REG_GRID_L1_VOLTAGE, count=1, slave=grid_meter_unit
         )
@@ -185,7 +167,6 @@ class VictronModbusClient:
         if v3_resp.isError():
             raise ModbusException(f"Grid L3 voltage read error: {v3_resp}")
 
-        # uint16, scale 10 → physical = raw / 10
         self._state.victron_l1_voltage_v = v1_resp.registers[0] / 10.0
         self._state.victron_l2_voltage_v = v2_resp.registers[0] / 10.0
         self._state.victron_l3_voltage_v = v3_resp.registers[0] / 10.0

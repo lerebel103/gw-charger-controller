@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -37,38 +36,49 @@ class TestEVChargerModbusClient:
         defaults.update(overrides)
         return AppState(**defaults)
 
-    # --- _needs_reconnect ---
+    # --- _config_changed ---
 
-    def test_needs_reconnect_no_client(self):
-        state = self._make_state()
-        client = EVChargerModbusClient(state)
-        assert client._needs_reconnect() is True
-
-    def test_needs_reconnect_ip_changed(self):
+    def test_config_changed_ip_changed(self):
         state = self._make_state()
         ec = EVChargerModbusClient(state)
-        ec._client = MagicMock(connected=True)
         ec._connected_ip = "192.168.1.20"
         ec._connected_port = 502
         state.ev_charger_ip = "10.0.0.1"
-        assert ec._needs_reconnect() is True
+        assert ec._config_changed() is True
 
-    def test_needs_reconnect_port_changed(self):
+    def test_config_changed_port_changed(self):
         state = self._make_state()
         ec = EVChargerModbusClient(state)
-        ec._client = MagicMock(connected=True)
         ec._connected_ip = "192.168.1.20"
         ec._connected_port = 502
         state.ev_charger_port = 503
-        assert ec._needs_reconnect() is True
+        assert ec._config_changed() is True
 
-    def test_no_reconnect_when_connected_same_params(self):
+    def test_config_changed_false_when_same_params(self):
+        state = self._make_state()
+        ec = EVChargerModbusClient(state)
+        ec._connected_ip = "192.168.1.20"
+        ec._connected_port = 502
+        assert ec._config_changed() is False
+
+    # --- connected property ---
+
+    def test_connected_false_no_client(self):
+        state = self._make_state()
+        ec = EVChargerModbusClient(state)
+        assert ec.connected is False
+
+    def test_connected_true_when_client_connected(self):
         state = self._make_state()
         ec = EVChargerModbusClient(state)
         ec._client = MagicMock(connected=True)
-        ec._connected_ip = "192.168.1.20"
-        ec._connected_port = 502
-        assert ec._needs_reconnect() is False
+        assert ec.connected is True
+
+    def test_connected_false_when_client_disconnected(self):
+        state = self._make_state()
+        ec = EVChargerModbusClient(state)
+        ec._client = MagicMock(connected=False)
+        assert ec.connected is False
 
     # --- _read_registers ---
 
@@ -96,8 +106,10 @@ class TestEVChargerModbusClient:
         te_resp = _make_response([0, 1500])
         # Car connection = 2 (connected)
         cc_resp = _make_response([2])
+        # Charger enable state = 2 (enabled)
+        en_resp = _make_response([2])
 
-        mock_client.read_holding_registers = AsyncMock(side_effect=[main_resp, ct_resp, te_resp, cc_resp])
+        mock_client.read_holding_registers = AsyncMock(side_effect=[main_resp, ct_resp, te_resp, cc_resp, en_resp, _make_response([0])])
 
         await ec._read_registers()
 
@@ -131,7 +143,7 @@ class TestEVChargerModbusClient:
         te_resp = _make_response([0, 0])
         cc_resp = _make_response([0])  # disconnected
 
-        mock_client.read_holding_registers = AsyncMock(side_effect=[main_resp, ct_resp, te_resp, cc_resp])
+        mock_client.read_holding_registers = AsyncMock(side_effect=[main_resp, ct_resp, te_resp, cc_resp, _make_response([2]), _make_response([0])])
 
         await ec._read_registers()
         assert state.ev_connected is False
@@ -179,7 +191,7 @@ class TestEVChargerModbusClient:
         te_resp = _make_response([0, 0])
         cc_resp = _make_error_response()
 
-        mock_client.read_holding_registers = AsyncMock(side_effect=[main_resp, ct_resp, te_resp, cc_resp])
+        mock_client.read_holding_registers = AsyncMock(side_effect=[main_resp, ct_resp, te_resp, cc_resp, _make_response([2]), _make_response([0])])
 
         from pymodbus.exceptions import ModbusException
 
@@ -201,7 +213,7 @@ class TestEVChargerModbusClient:
         te_resp = _make_response([0, 0])
         cc_resp = _make_response([2])
 
-        mock_client.read_holding_registers = AsyncMock(side_effect=[main_resp, ct_resp, te_resp, cc_resp])
+        mock_client.read_holding_registers = AsyncMock(side_effect=[main_resp, ct_resp, te_resp, cc_resp, _make_response([2]), _make_response([0])])
 
         await ec._read_registers()
 
@@ -225,7 +237,7 @@ class TestEVChargerModbusClient:
         te_resp = _make_response([0, 1500])
         cc_resp = _make_response([2])
 
-        mock_client.read_holding_registers = AsyncMock(side_effect=[main_resp, ct_resp, te_resp, cc_resp])
+        mock_client.read_holding_registers = AsyncMock(side_effect=[main_resp, ct_resp, te_resp, cc_resp, _make_response([2]), _make_response([0])])
 
         await ec._read_registers()
         assert state.ev_total_energy_wh == 150000.0
@@ -244,72 +256,10 @@ class TestEVChargerModbusClient:
         te_resp = _make_response([1, 0])
         cc_resp = _make_response([2])
 
-        mock_client.read_holding_registers = AsyncMock(side_effect=[main_resp, ct_resp, te_resp, cc_resp])
+        mock_client.read_holding_registers = AsyncMock(side_effect=[main_resp, ct_resp, te_resp, cc_resp, _make_response([2]), _make_response([0])])
 
         await ec._read_registers()
         assert state.ev_total_energy_wh == 6553600.0
-
-    # --- write_enable ---
-
-    @pytest.mark.asyncio
-    async def test_write_enable_true_writes_1(self):
-        """write_enable(True) writes value 1 to register 10060."""
-        state = self._make_state()
-        state.ev_connected = True
-        ec = EVChargerModbusClient(state)
-
-        mock_client = AsyncMock()
-        mock_client.connected = True
-        write_resp = _make_response([])
-        mock_client.write_register = AsyncMock(return_value=write_resp)
-        ec._client = mock_client
-
-        await ec.write_enable(True)
-
-        mock_client.write_register.assert_called_once_with(address=10060, value=2, slave=247)
-
-    @pytest.mark.asyncio
-    async def test_write_enable_false_writes_0(self):
-        """write_enable(False) writes value 0 to register 10060."""
-        state = self._make_state()
-        state.ev_connected = True
-        ec = EVChargerModbusClient(state)
-
-        mock_client = AsyncMock()
-        mock_client.connected = True
-        write_resp = _make_response([])
-        mock_client.write_register = AsyncMock(return_value=write_resp)
-        ec._client = mock_client
-
-        await ec.write_enable(False)
-
-        mock_client.write_register.assert_called_once_with(address=10060, value=1, slave=247)
-
-    @pytest.mark.asyncio
-    async def test_write_enable_skips_when_modbus_disconnected(self):
-        """write_enable skips when client is None."""
-        state = self._make_state()
-        state.ev_connected = True
-        ec = EVChargerModbusClient(state)
-        ec._client = None
-
-        await ec.write_enable(True)
-        # Should not raise
-
-    @pytest.mark.asyncio
-    async def test_write_enable_skips_when_ev_not_connected(self):
-        """write_enable skips when ev_connected is False."""
-        state = self._make_state()
-        state.ev_connected = False
-        ec = EVChargerModbusClient(state)
-
-        mock_client = AsyncMock()
-        mock_client.connected = True
-        ec._client = mock_client
-
-        await ec.write_enable(True)
-
-        mock_client.write_register.assert_not_called()
 
     # --- write_setpoint ---
 
@@ -380,53 +330,20 @@ class TestEVChargerModbusClient:
         assert ec._client is None
 
     @pytest.mark.asyncio
-    async def test_reconnect_success(self):
+    async def test_reconnect_closes_and_resets(self):
         state = self._make_state()
         ec = EVChargerModbusClient(state)
+        mock_client = MagicMock()
+        ec._client = mock_client
+        ec._reconnect_attempt = 5
+        ec._reconnect_after = 999.0
 
-        mock_client_instance = AsyncMock()
-        mock_client_instance.connect = AsyncMock(return_value=True)
-        mock_client_instance.connected = True
+        await ec.reconnect()
 
-        with patch(
-            "app.modbus_ev.AsyncModbusTcpClient",
-            return_value=mock_client_instance,
-        ):
-            await ec.reconnect()
-
-        assert ec._client is mock_client_instance
-        assert ec._connected_ip == "192.168.1.20"
-        assert ec._connected_port == 502
-
-    @pytest.mark.asyncio
-    async def test_reconnect_retries_on_failure(self):
-        state = self._make_state()
-        ec = EVChargerModbusClient(state)
-
-        fail_client = AsyncMock()
-        fail_client.connect = AsyncMock(return_value=False)
-
-        success_client = AsyncMock()
-        success_client.connect = AsyncMock(return_value=True)
-        success_client.connected = True
-
-        call_count = 0
-
-        def make_client(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count < 3:
-                return fail_client
-            return success_client
-
-        with (
-            patch("app.modbus_ev.AsyncModbusTcpClient", side_effect=make_client),
-            patch("app.modbus_ev.exponential_backoff", return_value=0.0),
-        ):
-            await ec.reconnect()
-
-        assert ec._client is success_client
-        assert call_count == 3
+        mock_client.close.assert_called_once()
+        assert ec._client is None
+        assert ec._reconnect_attempt == 0
+        assert ec._reconnect_after == 0.0
 
     # --- _close ---
 
@@ -440,32 +357,50 @@ class TestEVChargerModbusClient:
         mock_client.close.assert_called_once()
         assert ec._client is None
 
-    # --- poll_loop (single iteration) ---
+    # --- read() ---
 
     @pytest.mark.asyncio
-    async def test_poll_loop_reads_on_connected(self):
-        """Verify poll_loop calls _read_registers when connected."""
+    async def test_read_calls_read_registers_when_connected(self):
+        """Verify read() calls _read_registers when connected."""
         state = self._make_state()
-        ec = EVChargerModbusClient(state, poll_interval_s=0.01)
+        ec = EVChargerModbusClient(state)
 
         mock_client = AsyncMock()
         mock_client.connected = True
         ec._client = mock_client
-        ec._connected_ip = state.ev_charger_ip
-        ec._connected_port = state.ev_charger_port
 
-        iteration = 0
+        with patch.object(ec, "_read_registers", new_callable=AsyncMock) as mock_rr:
+            await ec.read()
 
-        async def fake_read():
-            nonlocal iteration
-            iteration += 1
-            if iteration >= 1:
-                raise asyncio.CancelledError
+        mock_rr.assert_awaited_once()
 
-        with patch.object(ec, "_read_registers", side_effect=fake_read), pytest.raises(asyncio.CancelledError):
-            await ec.poll_loop()
+    @pytest.mark.asyncio
+    async def test_read_skips_when_not_connected(self):
+        """read() is a no-op when not connected."""
+        state = self._make_state()
+        ec = EVChargerModbusClient(state)
 
-        assert iteration == 1
+        with patch.object(ec, "_read_registers", new_callable=AsyncMock) as mock_rr:
+            await ec.read()
+
+        mock_rr.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_read_closes_on_error(self):
+        """read() closes the connection on ModbusException."""
+        state = self._make_state()
+        ec = EVChargerModbusClient(state)
+
+        mock_client = AsyncMock()
+        mock_client.connected = True
+        ec._client = mock_client
+
+        from pymodbus.exceptions import ModbusException
+
+        with patch.object(ec, "_read_registers", side_effect=ModbusException("fail")):
+            await ec.read()
+
+        assert ec._client is None
 
     @pytest.mark.asyncio
     async def test_retains_last_values_on_failure(self):
@@ -479,8 +414,6 @@ class TestEVChargerModbusClient:
         mock_client = AsyncMock()
         mock_client.connected = True
         ec._client = mock_client
-        ec._connected_ip = state.ev_charger_ip
-        ec._connected_port = state.ev_charger_port
 
         from pymodbus.exceptions import ModbusException
 
@@ -488,11 +421,7 @@ class TestEVChargerModbusClient:
 
         import contextlib
 
-        with (
-            patch.object(ec, "reconnect", new_callable=AsyncMock),
-            patch.object(ec, "_needs_reconnect", return_value=False),
-            contextlib.suppress(ModbusException, OSError),
-        ):
+        with contextlib.suppress(ModbusException, OSError):
             await ec._read_registers()
 
         assert state.ev_active_power_w == 5000.0

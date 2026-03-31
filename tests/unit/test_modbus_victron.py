@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -62,38 +61,49 @@ class TestVictronModbusClient:
         defaults.update(overrides)
         return AppState(**defaults)
 
-    # --- _needs_reconnect ---
+    # --- _config_changed ---
 
-    def test_needs_reconnect_no_client(self):
-        state = self._make_state()
-        client = VictronModbusClient(state)
-        assert client._needs_reconnect() is True
-
-    def test_needs_reconnect_ip_changed(self):
+    def test_config_changed_ip_changed(self):
         state = self._make_state()
         vc = VictronModbusClient(state)
-        vc._client = MagicMock(connected=True)
         vc._connected_ip = "192.168.1.30"
         vc._connected_port = 502
         state.victron_ip = "10.0.0.1"
-        assert vc._needs_reconnect() is True
+        assert vc._config_changed() is True
 
-    def test_needs_reconnect_port_changed(self):
+    def test_config_changed_port_changed(self):
         state = self._make_state()
         vc = VictronModbusClient(state)
-        vc._client = MagicMock(connected=True)
         vc._connected_ip = "192.168.1.30"
         vc._connected_port = 502
         state.victron_port = 503
-        assert vc._needs_reconnect() is True
+        assert vc._config_changed() is True
 
-    def test_no_reconnect_when_connected_same_params(self):
+    def test_config_changed_false_when_same_params(self):
+        state = self._make_state()
+        vc = VictronModbusClient(state)
+        vc._connected_ip = "192.168.1.30"
+        vc._connected_port = 502
+        assert vc._config_changed() is False
+
+    # --- connected property ---
+
+    def test_connected_false_no_client(self):
+        state = self._make_state()
+        vc = VictronModbusClient(state)
+        assert vc.connected is False
+
+    def test_connected_true_when_client_connected(self):
         state = self._make_state()
         vc = VictronModbusClient(state)
         vc._client = MagicMock(connected=True)
-        vc._connected_ip = "192.168.1.30"
-        vc._connected_port = 502
-        assert vc._needs_reconnect() is False
+        assert vc.connected is True
+
+    def test_connected_false_when_client_disconnected(self):
+        state = self._make_state()
+        vc = VictronModbusClient(state)
+        vc._client = MagicMock(connected=False)
+        assert vc.connected is False
 
     # --- _read_registers ---
 
@@ -186,53 +196,20 @@ class TestVictronModbusClient:
         assert vc._client is None
 
     @pytest.mark.asyncio
-    async def test_reconnect_success(self):
+    async def test_reconnect_closes_and_resets(self):
         state = self._make_state()
         vc = VictronModbusClient(state)
+        mock_client = MagicMock()
+        vc._client = mock_client
+        vc._reconnect_attempt = 5
+        vc._reconnect_after = 999.0
 
-        mock_client_instance = AsyncMock()
-        mock_client_instance.connect = AsyncMock(return_value=True)
-        mock_client_instance.connected = True
+        await vc.reconnect()
 
-        with patch(
-            "app.modbus_victron.AsyncModbusTcpClient",
-            return_value=mock_client_instance,
-        ):
-            await vc.reconnect()
-
-        assert vc._client is mock_client_instance
-        assert vc._connected_ip == "192.168.1.30"
-        assert vc._connected_port == 502
-
-    @pytest.mark.asyncio
-    async def test_reconnect_retries_on_failure(self):
-        state = self._make_state()
-        vc = VictronModbusClient(state)
-
-        fail_client = AsyncMock()
-        fail_client.connect = AsyncMock(return_value=False)
-
-        success_client = AsyncMock()
-        success_client.connect = AsyncMock(return_value=True)
-        success_client.connected = True
-
-        call_count = 0
-
-        def make_client(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count < 3:
-                return fail_client
-            return success_client
-
-        with (
-            patch("app.modbus_victron.AsyncModbusTcpClient", side_effect=make_client),
-            patch("app.modbus_victron.exponential_backoff", return_value=0.0),
-        ):
-            await vc.reconnect()
-
-        assert vc._client is success_client
-        assert call_count == 3
+        mock_client.close.assert_called_once()
+        assert vc._client is None
+        assert vc._reconnect_attempt == 0
+        assert vc._reconnect_after == 0.0
 
     # --- _close ---
 
@@ -246,32 +223,50 @@ class TestVictronModbusClient:
         mock_client.close.assert_called_once()
         assert vc._client is None
 
-    # --- poll_loop (single iteration) ---
+    # --- read() ---
 
     @pytest.mark.asyncio
-    async def test_poll_loop_reads_on_connected(self):
-        """Verify poll_loop calls _read_registers when connected."""
+    async def test_read_calls_read_registers_when_connected(self):
+        """Verify read() calls _read_registers when connected."""
         state = self._make_state()
-        vc = VictronModbusClient(state, poll_interval_s=0.01)
+        vc = VictronModbusClient(state)
 
         mock_client = AsyncMock()
         mock_client.connected = True
         vc._client = mock_client
-        vc._connected_ip = state.victron_ip
-        vc._connected_port = state.victron_port
 
-        iteration = 0
+        with patch.object(vc, "_read_registers", new_callable=AsyncMock) as mock_rr:
+            await vc.read()
 
-        async def fake_read():
-            nonlocal iteration
-            iteration += 1
-            if iteration >= 1:
-                raise asyncio.CancelledError
+        mock_rr.assert_awaited_once()
 
-        with patch.object(vc, "_read_registers", side_effect=fake_read), pytest.raises(asyncio.CancelledError):
-            await vc.poll_loop()
+    @pytest.mark.asyncio
+    async def test_read_skips_when_not_connected(self):
+        """read() is a no-op when not connected."""
+        state = self._make_state()
+        vc = VictronModbusClient(state)
 
-        assert iteration == 1
+        with patch.object(vc, "_read_registers", new_callable=AsyncMock) as mock_rr:
+            await vc.read()
+
+        mock_rr.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_read_closes_on_error(self):
+        """read() closes the connection on ModbusException."""
+        state = self._make_state()
+        vc = VictronModbusClient(state)
+
+        mock_client = AsyncMock()
+        mock_client.connected = True
+        vc._client = mock_client
+
+        from pymodbus.exceptions import ModbusException
+
+        with patch.object(vc, "_read_registers", side_effect=ModbusException("fail")):
+            await vc.read()
+
+        assert vc._client is None
 
     @pytest.mark.asyncio
     async def test_retains_last_values_on_failure(self):
@@ -285,22 +280,14 @@ class TestVictronModbusClient:
         mock_client = AsyncMock()
         mock_client.connected = True
         vc._client = mock_client
-        vc._connected_ip = state.victron_ip
-        vc._connected_port = state.victron_port
 
-        # Simulate a read failure
         from pymodbus.exceptions import ModbusException
 
         mock_client.read_holding_registers = AsyncMock(side_effect=ModbusException("timeout"))
 
         import contextlib
 
-        # Patch reconnect to avoid infinite loop; run one iteration manually
-        with (
-            patch.object(vc, "reconnect", new_callable=AsyncMock),
-            patch.object(vc, "_needs_reconnect", return_value=False),
-            contextlib.suppress(ModbusException, OSError),
-        ):
+        with contextlib.suppress(ModbusException, OSError):
             await vc._read_registers()
 
         # Values should be retained
