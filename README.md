@@ -18,15 +18,19 @@ A Docker-based integration that bridges a GW22K-HCA-20 EV charger and a Victron 
 Eco mode maximises the use of free solar energy. It behaves differently depending on the time of day:
 
 **Outside the battery discharge window** (daytime):
-- A rolling mean of grid power and solar battery power is computed over a configurable window (default 5 minutes, adjustable 1–10 min via HA).
-- Charging starts when the mean grid power drops to -1400 W or below (sustained solar export).
-- The setpoint tracks instantaneous grid export, clamped to 4200–22000 W (charger hardware limits).
-- If the solar battery starts discharging, the setpoint is reduced to prevent battery drain.
-- Charging stops when the mean solar battery power exceeds +500 W, indicating the home battery is being drained.
+- Home battery SOC below 90% (configurable via HA): no EV charging. Battery gets full priority.
+- Home battery SOC 90-99%: EV charges at minimum power (4400 W) only, preserving home battery charging capacity.
+- Home battery SOC 100%: full ramp mode kicks in.
+  - A rolling mean of grid power is computed over a configurable window (default 5 min).
+  - Charging starts when the mean grid power drops to -1400 W or below (sustained solar export).
+  - The setpoint ramps up from minimum, using home battery power as feedback to find the max sustainable rate.
+  - If the home battery starts discharging, the setpoint is reduced to prevent home battery drain.
+  - Charging stops when the mean home battery power indicates sustained discharge.
+  - After stopping, a 5-minute cooldown prevents restarting to avoid rapid on/off cycling from clouds or transient house loads.
 
 **Inside the battery discharge window** (default 23:00–06:00, configurable):
-- Charges at a fixed rate (Solar Battery Max EV Charge Power, default 5000 W), drawing from the solar battery and grid as needed.
-- If the solar battery SOC drops to the discharge floor and the EV has reached its minimum SOC target, charging stops.
+- Charges at a fixed rate (Solar Battery Max EV Charge Power, default 5000 W), drawing from the home battery and grid as needed.
+- If the home battery SOC drops to the discharge floor and the EV has reached its minimum SOC target, charging stops.
 - If the EV hasn't reached its minimum SOC, charging continues even if that means importing from the grid.
 
 ### Manual Mode

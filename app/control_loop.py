@@ -22,7 +22,8 @@ _MAX_CHARGE_W = 22000.0
 
 # Eco outside-window thresholds (applied to rolling means)
 _GRID_EXPORT_START_THRESHOLD_W = -1400.0  # mean grid_power_w <= this → start charging
-_ECO_DAY_RAMP_STEP_W = 500.0  # ramp step per control loop iteration
+_ECO_DAY_RAMP_STEP_W = 200.0  # ramp step per control loop iteration
+_ECO_DAY_COOLDOWN_S = 300.0  # 5 min cooldown after eco day charging stops before restarting
 
 _EV_SOC_STALE_S = 300.0  # 5 minutes — treat SOC as unavailable if not updated
 
@@ -125,6 +126,7 @@ class ControlLoop:
         self._prev_ev_connected: bool | None = None  # None triggers initial state log
         self._eco_charging: bool = False
         self._eco_day_setpoint_w: float = _MIN_CHARGE_W
+        self._eco_day_stopped_at: float | None = None  # monotonic time when eco day last stopped
 
         # Rolling sample buffers: list of (monotonic_time, value) tuples
         self._grid_power_samples: list[tuple[float, float]] = []
@@ -209,9 +211,9 @@ class ControlLoop:
     def _setpoint_eco_night(self) -> float:
         """Eco inside discharge window: draw from solar battery at a fixed rate.
 
-        Stops when the battery hits the discharge floor and the EV has
+        Stops when the home battery hits the discharge floor and the EV has
         reached its minimum SOC target (or SOC is unknown).
-        Reduces the setpoint if battery discharge exceeds the allowed limit.
+        Reduces the setpoint if home battery discharge exceeds the allowed limit.
         """
         state = self._state
 
@@ -228,7 +230,7 @@ class ControlLoop:
 
         setpoint = clamp(state.solar_battery_max_ev_charge_power_w, _MIN_CHARGE_W, _MAX_CHARGE_W)
 
-        # Reduce setpoint if battery discharge exceeds the allowed max rate
+        # Reduce setpoint if home battery discharge exceeds the allowed max rate
         setpoint = self._limit_battery_discharge(setpoint, state.solar_battery_max_discharge_w)
         return setpoint
 
@@ -243,24 +245,34 @@ class ControlLoop:
         """
         state = self._state
 
-        # SOC gate: don't charge EV until battery is above threshold
+        # SOC gate: don't charge EV until home battery is above threshold
         if state.solar_battery_soc_pct is not None and state.solar_battery_soc_pct < state.eco_day_min_battery_soc_pct:
             if self._eco_charging:
                 logger.info(
-                    "Eco day: pausing charge (battery SOC %.0f%% < threshold %.0f%%)",
+                    "Eco day: pausing charge (home battery SOC %.0f%% < threshold %.0f%%)",
                     state.solar_battery_soc_pct, state.eco_day_min_battery_soc_pct,
                 )
                 self._eco_charging = False
             return 0.0
 
+        # Determine if home battery is full — used later to decide ramp vs minimum
+        battery_full = state.solar_battery_soc_pct is not None and state.solar_battery_soc_pct >= 100.0
+
         mean_grid = self._mean_grid_power()
         mean_battery = self._mean_battery_power()
+
+        # Cooldown: prevent restarting for 5 min after stopping
+        if not self._eco_charging and self._eco_day_stopped_at is not None:
+            elapsed = _time.monotonic() - self._eco_day_stopped_at
+            if elapsed < _ECO_DAY_COOLDOWN_S:
+                return 0.0
 
         # Start/stop decisions based on rolling means
         if not self._eco_charging:
             if mean_grid is not None and mean_grid <= _GRID_EXPORT_START_THRESHOLD_W:
                 self._eco_charging = True
                 self._eco_day_setpoint_w = _MIN_CHARGE_W
+                self._eco_day_stopped_at = None
                 logger.info(
                     "Eco day: starting charge at %.0f W (mean grid=%.0f W)",
                     self._eco_day_setpoint_w, mean_grid,
@@ -270,35 +282,37 @@ class ControlLoop:
 
         if mean_battery is not None and mean_battery < state.solar_battery_day_power_limit_w:
             self._eco_charging = False
+            self._eco_day_stopped_at = _time.monotonic()
             logger.info(
-                "Eco day: stopping charge (mean battery=%.0f W, limit=%.0f W)",
-                mean_battery, state.solar_battery_day_power_limit_w,
+                "Eco day: stopping charge (mean battery=%.0f W, limit=%.0f W), cooldown %.0f s",
+                mean_battery, state.solar_battery_day_power_limit_w, _ECO_DAY_COOLDOWN_S,
             )
             return 0.0
 
-        # Ramp: probe available solar capacity using battery feedback.
-        # Battery SOC gate above ensures the battery is nearly full before
-        # we get here, so the ramp just needs to avoid discharging it.
+        if not battery_full:
+            # Home battery 90-99%: lock EV at minimum to preserve battery charging
+            return _MIN_CHARGE_W
+
+        # Home battery 100%: full ramp — probe available solar capacity using
+        # battery feedback. The rolling mean stop (above) handles sustained
+        # discharge. The ramp nudges the setpoint up or down by a fixed step
+        # to find the sweet spot without overreacting to transients.
         battery_power = state.solar_battery_power_w
         if battery_power is not None and battery_power < 0:
-            # Battery is discharging — reduce setpoint by the discharge amount
-            self._eco_day_setpoint_w += battery_power  # negative, reduces
+            # Home battery is discharging — ramp down
+            self._eco_day_setpoint_w -= _ECO_DAY_RAMP_STEP_W
         else:
-            # Battery is charging or idle — solar has headroom, ramp up
+            # Home battery is charging or idle — ramp up
             self._eco_day_setpoint_w += _ECO_DAY_RAMP_STEP_W
 
         self._eco_day_setpoint_w = clamp(self._eco_day_setpoint_w, _MIN_CHARGE_W, _MAX_CHARGE_W)
-
-        # If at minimum and battery still discharging, pause
-        if self._eco_day_setpoint_w <= _MIN_CHARGE_W and battery_power is not None and battery_power < 0:
-            return 0.0
 
         return self._eco_day_setpoint_w
 
     # --- Shared helpers ---
 
     def _limit_battery_discharge(self, setpoint: float, max_discharge_w: float) -> float:
-        """Reduce setpoint if battery discharge exceeds the allowed limit.
+        """Reduce setpoint if home battery discharge exceeds the allowed limit.
 
         Returns 0.0 if the adjusted setpoint falls below _MIN_CHARGE_W.
         """
