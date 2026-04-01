@@ -51,6 +51,7 @@ def _sensor(
         "name": name,
         "state_topic": f"{_PREFIX}/sensor/{slug}/state",
         "unit_of_measurement": unit,
+        "force_update": True,
     }
     if device_class:
         d["device_class"] = device_class
