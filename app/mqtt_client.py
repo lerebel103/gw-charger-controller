@@ -320,6 +320,7 @@ class MQTTClient:
             payload: dict[str, Any] = {
                 "name": entity["name"],
                 "unique_id": unique_id,
+                "object_id": unique_id,
                 "state_topic": entity["state_topic"],
                 "device": _DEVICE,
             }
@@ -335,7 +336,7 @@ class MQTTClient:
                 payload["command_topic"] = entity["command_topic"]
             if "options" in entity:
                 payload["options"] = entity["options"]
-            for key in ("min", "max", "step", "mode"):
+            for key in ("min", "max", "step", "mode", "force_update"):
                 if key in entity:
                     payload[key] = entity[key]
 
