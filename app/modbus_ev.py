@@ -142,7 +142,7 @@ class EVChargerModbusClient:
             if resp.isError():
                 raise ModbusException(f"Setpoint write error: {resp}")
             self._state.ev_charger_setpoint_raw = raw
-            logger.info("Wrote charging setpoint raw=%d (%.0f W)", raw, power_w)
+            logger.debug("Wrote charging setpoint raw=%d (%.0f W)", raw, power_w)
         except (ModbusException, OSError) as exc:
             logger.warning("EV charger setpoint write failed: %s", exc)
 
