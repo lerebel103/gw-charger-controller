@@ -293,6 +293,14 @@ class ControlLoop:
             # Home battery 90-99%: lock EV at minimum to preserve battery charging
             return _MIN_CHARGE_W
 
+        # Don't ramp until the charger is actually drawing power — it can take
+        # a while to start. Ramping while ev_active_power_w is zero would
+        # overshoot the setpoint before the charger begins.
+        ev_power = state.ev_active_power_w
+        if ev_power is None or ev_power <= 0:
+            self._eco_day_setpoint_w = _MIN_CHARGE_W
+            return _MIN_CHARGE_W
+
         # Home battery 100%: full ramp — probe available solar capacity using
         # battery feedback. The rolling mean stop (above) handles sustained
         # discharge. The ramp nudges the setpoint up or down by a fixed step

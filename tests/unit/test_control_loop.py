@@ -89,6 +89,7 @@ class TestSetpointEcoDay:
             solar_battery_soc_pct=100.0,
             solar_battery_power_w=2000.0,
             grid_power_w=-1500.0,
+            ev_active_power_w=4400.0,
             eco_day_min_battery_soc_pct=90.0,
             solar_battery_day_power_limit_w=-1500.0,
             solar_battery_discharge_start="23:00",
@@ -431,6 +432,7 @@ class TestEcoDayRealWorldScenarios:
             solar_battery_soc_pct=100.0,
             solar_battery_power_w=2000.0,
             grid_power_w=-1500.0,
+            ev_active_power_w=4400.0,
             eco_day_min_battery_soc_pct=90.0,
             solar_battery_day_power_limit_w=-1500.0,
             solar_battery_discharge_start="23:00",
@@ -526,3 +528,50 @@ class TestEcoDayRealWorldScenarios:
         _fill_battery_samples(cl, 3000.0)
         result = cl._setpoint_eco_day()
         assert result == 0.0  # still in cooldown
+
+
+    def test_100_no_ramp_when_ev_not_drawing_power(self):
+        """When ev_active_power_w is 0 (charger starting up), hold at minimum, don't ramp."""
+        state = self._make_state(
+            solar_battery_soc_pct=100.0,
+            solar_battery_power_w=3000.0,
+            ev_active_power_w=0.0,  # charger hasn't started drawing yet
+        )
+        cl = _make_loop(state)
+        cl._eco_charging = True
+        cl._eco_day_setpoint_w = 6000.0  # was ramped up previously
+        _fill_grid_samples(cl, -1500.0)
+        _fill_battery_samples(cl, 3000.0)
+        result = cl._setpoint_eco_day()
+        assert result == _MIN_CHARGE_W  # reset to minimum, not ramped further
+        assert cl._eco_day_setpoint_w == _MIN_CHARGE_W
+
+    def test_100_no_ramp_when_ev_power_none(self):
+        """When ev_active_power_w is None (no reading yet), hold at minimum."""
+        state = self._make_state(
+            solar_battery_soc_pct=100.0,
+            solar_battery_power_w=3000.0,
+            ev_active_power_w=None,
+        )
+        cl = _make_loop(state)
+        cl._eco_charging = True
+        cl._eco_day_setpoint_w = 5000.0
+        _fill_grid_samples(cl, -1500.0)
+        _fill_battery_samples(cl, 3000.0)
+        result = cl._setpoint_eco_day()
+        assert result == _MIN_CHARGE_W
+
+    def test_100_ramps_when_ev_drawing_power(self):
+        """When ev_active_power_w > 0 (charger active), ramp proceeds normally."""
+        state = self._make_state(
+            solar_battery_soc_pct=100.0,
+            solar_battery_power_w=2000.0,
+            ev_active_power_w=4400.0,  # charger is drawing power
+        )
+        cl = _make_loop(state)
+        cl._eco_charging = True
+        cl._eco_day_setpoint_w = 5000.0
+        _fill_grid_samples(cl, -1500.0)
+        _fill_battery_samples(cl, 2000.0)
+        result = cl._setpoint_eco_day()
+        assert result == 5000.0 + _ECO_DAY_RAMP_STEP_W  # ramped up
