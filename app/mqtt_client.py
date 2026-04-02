@@ -438,7 +438,7 @@ class MQTTClient:
                 return
             self._state.ev_soc_pct = soc
             self._state.ev_soc_pct_updated_at = time.monotonic()
-            logger.info("Received vehicle SOC: %.1f%%", soc)
+            logger.debug("Received vehicle SOC: %.1f%%", soc)
             return
 
         mapping = _COMMAND_MAP.get(topic_str)
