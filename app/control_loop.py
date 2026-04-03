@@ -256,7 +256,7 @@ class ControlLoop:
             return 0.0
 
         # Determine if home battery is full — used later to decide ramp vs minimum
-        battery_full = state.solar_battery_soc_pct is not None and state.solar_battery_soc_pct >= 100.0
+        battery_full = state.solar_battery_soc_pct is not None and state.solar_battery_soc_pct >= 98.0
 
         mean_grid = self._mean_grid_power()
         mean_battery = self._mean_battery_power()
