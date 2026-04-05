@@ -158,6 +158,7 @@ ENTITIES: list[dict[str, Any]] = [
     # Numbers
     _number("ev_charger_manual_power", "Manual Charge Power", "manual_power", 4400, 11000, 100, "W"),
     _number("ev_charger_ev_min_soc", "Min EV SOC", "ev_min_soc", 0, 100, 1, "%"),
+    _number("ev_charger_ev_battery_capacity", "EV Battery Capacity", "ev_battery_capacity", 10, 200, 1, "kWh"),
     _number("ev_charger_solar_battery_floor", "Solar Batt Discharge Floor", "solar_battery_floor", 0, 100, 1, "%"),
     _number(
         "ev_charger_solar_battery_max_ev_charge",
@@ -242,6 +243,7 @@ _COMMAND_MAP: dict[str, tuple[str, str]] = {
     f"{_PREFIX}/select/mode/set": ("charge_mode", "select"),
     f"{_PREFIX}/number/manual_power/set": ("manual_power_w", "float"),
     f"{_PREFIX}/number/ev_min_soc/set": ("ev_min_soc_pct", "float"),
+    f"{_PREFIX}/number/ev_battery_capacity/set": ("ev_battery_capacity_kwh", "float"),
     f"{_PREFIX}/number/solar_battery_floor/set": ("solar_battery_discharge_floor_pct", "float"),
     f"{_PREFIX}/number/solar_battery_max_ev_charge/set": ("solar_battery_max_ev_charge_power_w", "float"),
     f"{_PREFIX}/number/solar_battery_max_discharge/set": ("solar_battery_max_discharge_w", "float"),
@@ -262,6 +264,7 @@ _COMMAND_MAP: dict[str, tuple[str, str]] = {
 _NUMBER_RANGES: dict[str, tuple[float, float]] = {
     "manual_power_w": (4400, 11000),
     "ev_min_soc_pct": (0, 100),
+    "ev_battery_capacity_kwh": (10, 200),
     "solar_battery_discharge_floor_pct": (0, 100),
     "solar_battery_max_ev_charge_power_w": (4400, 11000),
     "solar_battery_max_discharge_w": (0, 15000),
@@ -400,6 +403,7 @@ class MQTTClient:
             (f"{_PREFIX}/select/mode/state", str(s.charge_mode)),
             (f"{_PREFIX}/number/manual_power/state", str(s.manual_power_w)),
             (f"{_PREFIX}/number/ev_min_soc/state", str(s.ev_min_soc_pct)),
+            (f"{_PREFIX}/number/ev_battery_capacity/state", str(s.ev_battery_capacity_kwh)),
             (f"{_PREFIX}/number/solar_battery_floor/state", str(s.solar_battery_discharge_floor_pct)),
             (f"{_PREFIX}/number/solar_battery_max_ev_charge/state", str(s.solar_battery_max_ev_charge_power_w)),
             (f"{_PREFIX}/number/solar_battery_max_discharge/state", str(s.solar_battery_max_discharge_w)),

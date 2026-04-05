@@ -575,3 +575,107 @@ class TestEcoDayRealWorldScenarios:
         _fill_battery_samples(cl, 2000.0)
         result = cl._setpoint_eco_day()
         assert result == 5000.0 + _ECO_DAY_RAMP_STEP_W  # ramped up
+
+
+
+class TestEcoNightGridFallback:
+    """Tests for grid fallback when home battery goes flat during eco night."""
+
+    def _make_state(self, **overrides):
+        defaults = dict(
+            ev_connected=True,
+            charge_mode="Eco",
+            solar_battery_soc_pct=20.0,  # at floor
+            solar_battery_power_w=0.0,   # battery flat (not delivering)
+            solar_battery_discharge_floor_pct=20.0,
+            solar_battery_max_ev_charge_power_w=5000.0,
+            solar_battery_max_discharge_w=6000.0,
+            ev_min_soc_pct=40.0,
+            ev_battery_capacity_kwh=82.0,
+            grid_power_w=0.0,
+            solar_battery_discharge_start="23:00",
+            solar_battery_discharge_end="06:00",
+        )
+        defaults.update(overrides)
+        return AppState(**defaults)
+
+    def test_battery_flat_ev_needs_charge_calculates_grid_power(self):
+        """When battery is flat and EV needs charge, compute grid fallback setpoint."""
+        state = self._make_state(
+            solar_battery_power_w=200.0,  # > 100, battery stopped discharging
+            ev_soc_pct=20.0,
+        )
+        state.ev_soc_pct_updated_at = _time.monotonic()
+        cl = _make_loop(state)
+        result = cl._setpoint_eco_night()
+        # Should return a positive setpoint (grid fallback), not 0
+        assert result >= _MIN_CHARGE_W
+
+    def test_battery_flat_ev_soc_met_returns_zero(self):
+        """When battery is flat but EV has reached target SOC, stop."""
+        state = self._make_state(
+            solar_battery_power_w=200.0,
+            ev_soc_pct=50.0,  # above 40% target
+        )
+        state.ev_soc_pct_updated_at = _time.monotonic()
+        cl = _make_loop(state)
+        result = cl._setpoint_eco_night()
+        assert result == 0.0
+
+    def test_battery_flat_ev_soc_unknown_returns_zero(self):
+        """When battery is flat and EV SOC is unknown, stop (conservative)."""
+        state = self._make_state(
+            solar_battery_power_w=200.0,
+            ev_soc_pct=None,
+        )
+        cl = _make_loop(state)
+        result = cl._setpoint_eco_night()
+        assert result == 0.0
+
+    def test_battery_still_delivering_uses_normal_logic(self):
+        """When battery is still delivering power (not flat), use normal setpoint."""
+        state = self._make_state(
+            solar_battery_power_w=-3000.0,  # still discharging
+            solar_battery_soc_pct=50.0,     # above floor
+        )
+        cl = _make_loop(state)
+        result = cl._setpoint_eco_night()
+        assert result == 5000.0  # normal fixed setpoint
+
+    def test_grid_fallback_clamps_to_min(self):
+        """Grid fallback setpoint is clamped to charger minimum."""
+        state = self._make_state(
+            solar_battery_power_w=200.0,
+            ev_soc_pct=39.0,  # only 1% gap, very little energy needed
+        )
+        state.ev_soc_pct_updated_at = _time.monotonic()
+        cl = _make_loop(state)
+        result = cl._compute_grid_fallback_setpoint(39.0)
+        assert result >= _MIN_CHARGE_W
+
+    def test_grid_fallback_clamps_to_max(self):
+        """Grid fallback setpoint is clamped to charger maximum."""
+        state = self._make_state(
+            solar_battery_power_w=200.0,
+            ev_soc_pct=5.0,  # huge gap, needs lots of power
+            ev_battery_capacity_kwh=200.0,  # large battery
+        )
+        state.ev_soc_pct_updated_at = _time.monotonic()
+        cl = _make_loop(state)
+        # With a huge gap and short time, required power could exceed max
+        result = cl._compute_grid_fallback_setpoint(5.0)
+        assert result <= _MAX_CHARGE_W
+
+    def test_grid_fallback_ev_already_at_target(self):
+        """Grid fallback returns 0 when EV is already at target."""
+        state = self._make_state()
+        cl = _make_loop(state)
+        result = cl._compute_grid_fallback_setpoint(40.0)
+        assert result == 0.0
+
+    def test_grid_fallback_ev_above_target(self):
+        """Grid fallback returns 0 when EV is above target."""
+        state = self._make_state()
+        cl = _make_loop(state)
+        result = cl._compute_grid_fallback_setpoint(60.0)
+        assert result == 0.0

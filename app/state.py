@@ -48,6 +48,7 @@ class AppState:
     charge_mode: str = "Eco"
     manual_power_w: float = 3680.0
     ev_min_soc_pct: float = 40.0
+    ev_battery_capacity_kwh: float = 82.0  # EV battery capacity in kWh
     solar_battery_discharge_floor_pct: float = 20.0
     solar_battery_discharge_start: str = "23:00"
     solar_battery_discharge_end: str = "06:00"
@@ -77,6 +78,7 @@ PERSISTED_FIELDS: set[str] = {
     "charge_mode",
     "manual_power_w",
     "ev_min_soc_pct",
+    "ev_battery_capacity_kwh",
     "solar_battery_discharge_floor_pct",
     "solar_battery_discharge_start",
     "solar_battery_discharge_end",

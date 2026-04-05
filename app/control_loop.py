@@ -214,16 +214,37 @@ class ControlLoop:
         Stops when the home battery hits the discharge floor and the EV has
         reached its minimum SOC target (or SOC is unknown).
         Reduces the setpoint if home battery discharge exceeds the allowed limit.
+
+        When the home battery goes flat (abs(battery_power) < 100 W) and the
+        EV still needs charge, calculates the grid power required to reach
+        ev_min_soc_pct by the end of the discharge window.
         """
         state = self._state
+        ev_soc = self._get_ev_soc()
 
-        # Check if battery has reached the discharge floor
+        # Detect home battery stopped providing power: battery_power > -100 W
+        # (negative = discharging; > -100 means barely discharging, idle, or
+        # charging — the battery has effectively stopped delivering energy)
+        battery_flat = (
+            state.solar_battery_power_w is not None
+            and state.solar_battery_power_w > -100.0
+            and state.solar_battery_soc_pct is not None
+            and state.solar_battery_soc_pct <= state.solar_battery_discharge_floor_pct
+        )
+
+        if battery_flat:
+            ev_needs_charge = ev_soc is not None and ev_soc < state.ev_min_soc_pct
+            if not ev_needs_charge:
+                return 0.0
+            # Calculate required grid power to reach ev_min_soc_pct by discharge window end
+            return self._compute_grid_fallback_setpoint(ev_soc)
+
+        # Check if battery has reached the discharge floor (but still delivering power)
         at_floor = (
             state.solar_battery_soc_pct is not None
             and state.solar_battery_soc_pct <= state.solar_battery_discharge_floor_pct
         )
         if at_floor:
-            ev_soc = self._get_ev_soc()
             ev_needs_charge = ev_soc is not None and ev_soc < state.ev_min_soc_pct
             if not ev_needs_charge:
                 return 0.0
@@ -233,6 +254,53 @@ class ControlLoop:
         # Reduce setpoint if home battery discharge exceeds the allowed max rate
         setpoint = self._limit_battery_discharge(setpoint, state.solar_battery_max_discharge_w)
         return setpoint
+
+    def _compute_grid_fallback_setpoint(self, ev_soc: float) -> float:
+        """Calculate the power needed from the grid to reach ev_min_soc_pct by discharge window end.
+
+        Args:
+            ev_soc: Current EV SOC percentage.
+
+        Returns:
+            Required charge power in watts, clamped to charger limits. Returns 0 if
+            there's no time remaining or the target is already met.
+        """
+        state = self._state
+
+        # Energy needed: (target_soc - current_soc) / 100 * capacity_kwh → kWh
+        soc_gap = state.ev_min_soc_pct - ev_soc
+        if soc_gap <= 0:
+            return 0.0
+        energy_needed_kwh = soc_gap / 100.0 * state.ev_battery_capacity_kwh
+
+        # Time remaining until discharge window ends
+        if not validate_hhmm(state.solar_battery_discharge_end):
+            return _MIN_CHARGE_W  # fallback to minimum if time is invalid
+
+        end_time = _parse_hhmm(state.solar_battery_discharge_end)
+        now = datetime.now().time()  # noqa: DTZ005
+
+        # Calculate seconds until end_time (handles midnight spanning)
+        now_s = now.hour * 3600 + now.minute * 60 + now.second
+        end_s = end_time.hour * 3600 + end_time.minute * 60
+        remaining_s = end_s - now_s
+        if remaining_s <= 0:
+            remaining_s += 86400  # wrap past midnight
+
+        if remaining_s < 60:  # less than 1 minute left
+            return 0.0
+
+        remaining_h = remaining_s / 3600.0
+
+        # Required power: energy_needed_kwh / remaining_h → kW → * 1000 → W
+        required_w = (energy_needed_kwh / remaining_h) * 1000.0
+
+        logger.debug(
+            "Eco night grid fallback: EV SOC %.0f%% -> %.0f%%, need %.1f kWh in %.1f h, required %.0f W",
+            ev_soc, state.ev_min_soc_pct, energy_needed_kwh, remaining_h, required_w,
+        )
+
+        return clamp(required_w, _MIN_CHARGE_W, _MAX_CHARGE_W)
 
     def _setpoint_eco_day(self) -> float:
         """Eco outside discharge window: charge from excess solar.
