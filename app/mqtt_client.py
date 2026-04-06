@@ -43,6 +43,7 @@ def _sensor(
     unit: str,
     device_class: str | None = None,
     state_class: str | None = None,
+    entity_category: str | None = None,
 ) -> dict[str, Any]:
     """Build a sensor entity definition."""
     d: dict[str, Any] = {
@@ -57,6 +58,8 @@ def _sensor(
         d["device_class"] = device_class
     if state_class:
         d["state_class"] = state_class
+    if entity_category:
+        d["entity_category"] = entity_category
     return d
 
 
@@ -151,6 +154,7 @@ ENTITIES: list[dict[str, Any]] = [
     _sensor("ev_charger_l3_voltage_drop", "L3 Voltage Drop %", "l3_voltage_drop_perc", "%", None, "measurement"),
     _sensor("ev_charger_completion_time", "Completion Time", "completion_time", "h", None, "measurement"),
     _sensor("ev_charger_soc", "EV SOC", "ev_soc", "%", "battery", "measurement"),
+    _sensor("ev_charger_uptime", "Controller Uptime", "uptime", "s", None, "total_increasing", "diagnostic"),
     # Binary sensors
     _binary_sensor("ev_charger_connected", "EV Connected", "connected", "connectivity"),
     # Select
@@ -342,7 +346,7 @@ class MQTTClient:
                 payload["command_topic"] = entity["command_topic"]
             if "options" in entity:
                 payload["options"] = entity["options"]
-            for key in ("min", "max", "step", "mode", "force_update"):
+            for key in ("min", "max", "step", "mode", "force_update", "entity_category"):
                 if key in entity:
                     payload[key] = entity[key]
 
@@ -396,6 +400,11 @@ class MQTTClient:
         await self._client.publish(
             f"{_PREFIX}/binary_sensor/connected/state",
             "ON" if snapshot.ev_connected else "OFF",
+        )
+
+        # Diagnostics
+        await self._client.publish(
+            f"{_PREFIX}/sensor/uptime/state", str(int(snapshot.uptime_s))
         )
 
     async def _publish_config_state(self) -> None:

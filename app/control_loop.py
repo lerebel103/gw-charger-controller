@@ -133,6 +133,7 @@ class ControlLoop:
         self._stopping_at: float | None = None  # monotonic time when stopping event was emitted
         self._stopping_reason: str | None = None
         self._last_positive_setpoint: float = _MIN_CHARGE_W
+        self._start_time: float = _time.monotonic()
         self._eco_day_stopped_at: float | None = None  # monotonic time when eco day last stopped
 
         # Rolling sample buffers: list of (monotonic_time, value) tuples
@@ -593,6 +594,7 @@ class ControlLoop:
                 l2_voltage_drop_pct=self._state.l2_voltage_drop_pct,
                 l3_voltage_drop_pct=self._state.l3_voltage_drop_pct,
                 commanded_setpoint_w=self._state.commanded_setpoint_w,
+                uptime_s=round(_time.monotonic() - self._start_time),
                 timestamp=datetime.now(),  # noqa: DTZ005
             )
             await self._publish_queue.put(snapshot)

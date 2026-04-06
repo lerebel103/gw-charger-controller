@@ -123,4 +123,5 @@ class StateSnapshot:
     l2_voltage_drop_pct: float | None = None
     l3_voltage_drop_pct: float | None = None
     commanded_setpoint_w: float | None = None
+    uptime_s: float = 0.0
     timestamp: datetime = field(default_factory=datetime.now)
