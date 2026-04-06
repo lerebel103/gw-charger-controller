@@ -25,6 +25,8 @@ _GRID_EXPORT_START_THRESHOLD_W = -1400.0  # mean grid_power_w <= this → start 
 _ECO_DAY_RAMP_STEP_W = 200.0  # ramp step per control loop iteration
 _ECO_DAY_COOLDOWN_S = 300.0  # 5 min cooldown after eco day charging stops before restarting
 
+_EV_MAX_SOC_DEFAULT = 80.0  # reset value on disconnect
+_EV_MAX_SOC_MARGIN_PCT = 0.1  # stop charging this much below the target to account for SOC reporting lag
 _EV_SOC_STALE_S = 300.0  # 5 minutes — treat SOC as unavailable if not updated
 
 
@@ -179,6 +181,12 @@ class ControlLoop:
     def _compute_setpoint(self) -> float | None:
         """Compute the charge power setpoint (watts), or None if no vehicle."""
         if not self._state.ev_connected:
+            return 0.0
+
+        # Max SOC limit: stop charging if EV has reached the max SOC target.
+        # Only applies when EV SOC is available; otherwise charging continues.
+        ev_soc = self._get_ev_soc()
+        if ev_soc is not None and ev_soc >= (self._state.ev_max_soc_pct - _EV_MAX_SOC_MARGIN_PCT):
             return 0.0
 
         mode = self._state.charge_mode
@@ -425,12 +433,16 @@ class ControlLoop:
                 logger.info("EV vehicle connected")
             elif not self._state.ev_connected and self._prev_ev_connected is not False:
                 logger.info("EV vehicle disconnected")
+                # Reset max SOC to default to protect battery
+                if self._state.ev_max_soc_pct != _EV_MAX_SOC_DEFAULT:
+                    self._state.ev_max_soc_pct = _EV_MAX_SOC_DEFAULT
+                    logger.info("Reset max EV SOC to %.0f%%", _EV_MAX_SOC_DEFAULT)
                 if self._state.charge_mode == "Manual":
                     logger.info("Resetting charge mode from Manual to Eco")
                     self._state.charge_mode = "Eco"
-                    if self._config_manager is not None:
-                        self._config_manager.schedule_persist(self._state)
-                    self._publish_queue.put_nowait("republish_config")
+                if self._config_manager is not None:
+                    self._config_manager.schedule_persist(self._state)
+                self._publish_queue.put_nowait("republish_config")
             self._prev_ev_connected = self._state.ev_connected
 
             # 4. Compute setpoint, ensure charger enabled, write

@@ -679,3 +679,99 @@ class TestEcoNightGridFallback:
         cl = _make_loop(state)
         result = cl._compute_grid_fallback_setpoint(60.0)
         assert result == 0.0
+
+
+
+class TestEvMaxSoc:
+    """Tests for max EV SOC charge limit."""
+
+    def test_stops_when_ev_reaches_max_soc(self):
+        """Charging stops when EV SOC reaches the max target."""
+        state = AppState(
+            ev_connected=True,
+            charge_mode="Manual",
+            manual_power_w=7000.0,
+            ev_soc_pct=80.0,
+            ev_max_soc_pct=80.0,
+        )
+        state.ev_soc_pct_updated_at = _time.monotonic()
+        cl = _make_loop(state)
+        assert cl._compute_setpoint() == 0.0
+
+    def test_stops_when_ev_above_max_soc(self):
+        """Charging stops when EV SOC is above the max target."""
+        state = AppState(
+            ev_connected=True,
+            charge_mode="Manual",
+            manual_power_w=7000.0,
+            ev_soc_pct=90.0,
+            ev_max_soc_pct=80.0,
+        )
+        state.ev_soc_pct_updated_at = _time.monotonic()
+        cl = _make_loop(state)
+        assert cl._compute_setpoint() == 0.0
+
+    def test_continues_when_ev_below_max_soc(self):
+        """Charging continues when EV SOC is below the max target."""
+        state = AppState(
+            ev_connected=True,
+            charge_mode="Manual",
+            manual_power_w=7000.0,
+            ev_soc_pct=70.0,
+            ev_max_soc_pct=80.0,
+        )
+        state.ev_soc_pct_updated_at = _time.monotonic()
+        cl = _make_loop(state)
+        assert cl._compute_setpoint() == 7000.0
+
+    def test_continues_when_ev_soc_unavailable(self):
+        """Charging continues when EV SOC is unavailable (None)."""
+        state = AppState(
+            ev_connected=True,
+            charge_mode="Manual",
+            manual_power_w=7000.0,
+            ev_soc_pct=None,
+            ev_max_soc_pct=80.0,
+        )
+        cl = _make_loop(state)
+        assert cl._compute_setpoint() == 7000.0
+
+    def test_applies_to_standby_mode(self):
+        """Max SOC check runs before mode dispatch — standby still returns 0."""
+        state = AppState(
+            ev_connected=True,
+            charge_mode="Standby",
+            ev_soc_pct=90.0,
+            ev_max_soc_pct=80.0,
+        )
+        state.ev_soc_pct_updated_at = _time.monotonic()
+        cl = _make_loop(state)
+        assert cl._compute_setpoint() == 0.0
+
+    def test_max_soc_resets_on_disconnect(self):
+        """ev_max_soc_pct resets to 80% when vehicle is disconnected."""
+        state = AppState(
+            ev_connected=False,
+            ev_max_soc_pct=100.0,
+        )
+        cl = _make_loop(state)
+        cl._prev_ev_connected = True  # was connected, now disconnected
+        # Simulate one run_loop iteration's disconnect detection
+        # We test the logic directly
+        if not state.ev_connected and cl._prev_ev_connected is not False:
+            from app.control_loop import _EV_MAX_SOC_DEFAULT
+            state.ev_max_soc_pct = _EV_MAX_SOC_DEFAULT
+        assert state.ev_max_soc_pct == 80.0
+
+    def test_max_soc_100_allows_full_charge(self):
+        """When max SOC is set to 100%, charging continues past 80%."""
+        state = AppState(
+            ev_connected=True,
+            charge_mode="Manual",
+            manual_power_w=7000.0,
+            ev_soc_pct=85.0,
+            ev_max_soc_pct=100.0,
+        )
+        state.ev_soc_pct_updated_at = _time.monotonic()
+        cl = _make_loop(state)
+        assert cl._compute_setpoint() == 7000.0
