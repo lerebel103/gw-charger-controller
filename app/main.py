@@ -99,7 +99,7 @@ def main() -> None:
     args = parser.parse_args()
 
     setup_logging()
-    logger.info("EV Charger Controller v%s", __version__)
+    logger.info("EV Charger Controller %s", __version__)
     asyncio.run(_async_main(args.config))
 
 
