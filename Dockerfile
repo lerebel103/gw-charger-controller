@@ -20,6 +20,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application source code
 COPY app/ ./app/
 
+# Inject version from build arg (set by Makefile from git tag)
+ARG VERSION=dev
+RUN echo '"""Version of the EV charger integration."""\n\n__version__ = "'${VERSION}'"\n' > app/version.py
+
 # Create config directory and set permissions
 RUN mkdir -p /etc/gw-evcharger-controller && \
     chown -R lerebel103:lerebel103 /app /etc/gw-evcharger-controller
@@ -39,4 +43,4 @@ CMD ["python", "-m", "app", "--config", "/etc/gw-evcharger-controller/config.yam
 # Labels for metadata
 LABEL maintainer="lerebel103"
 LABEL description="GW Charger Controller - EV charger integration for Home Assistant"
-LABEL version="1.0.0"
+LABEL version="${VERSION}"

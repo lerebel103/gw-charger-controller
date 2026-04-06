@@ -12,6 +12,7 @@ import traceback
 from app.config import ConfigError, ConfigManager
 from app.control_loop import ControlLoop
 from app.logging_setup import setup_logging
+from app.version import __version__
 from app.modbus_ev import EVChargerModbusClient
 from app.modbus_victron import VictronModbusClient
 from app.mqtt_client import MQTTClient
@@ -98,6 +99,7 @@ def main() -> None:
     args = parser.parse_args()
 
     setup_logging()
+    logger.info("EV Charger Controller v%s", __version__)
     asyncio.run(_async_main(args.config))
 
 

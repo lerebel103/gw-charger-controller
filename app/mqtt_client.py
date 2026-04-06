@@ -11,6 +11,7 @@ from typing import Any
 import aiomqtt
 
 from app.backoff import exponential_backoff
+from app.version import __version__
 from app.config import ConfigManager
 from app.control_loop import normalise_hhmm, validate_hhmm
 from app.state import AppState, StateSnapshot
@@ -25,6 +26,7 @@ _DEVICE = {
     "name": "EV Charger",
     "model": "GW22K-HCA-20",
     "manufacturer": "Goodwe",
+    "sw_version": __version__,
 }
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,5 @@
 # Variables
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 IMAGE_NAME = gw-evcharger-controller
 IMAGE_TAG = latest
 CONTAINER_NAME = gw-evcharger-controller
@@ -22,8 +23,8 @@ help:
 # Build Docker image
 .PHONY: build
 build:
-	@echo "Building Docker image..."
-	docker build -t $(IMAGE_NAME):$(IMAGE_TAG) .
+	@echo "Building Docker image (version: $(VERSION))..."
+	docker build --build-arg VERSION=$(VERSION) -t $(IMAGE_NAME):$(IMAGE_TAG) .
 	@echo "Build complete: $(IMAGE_NAME):$(IMAGE_TAG)"
 
 # Build multi-architecture Docker images
@@ -36,7 +37,8 @@ build-multi:
 	docker buildx build \
 		--platform linux/amd64,linux/arm64 \
 		--tag $(DOCKER_USER)/$(IMAGE_NAME):$(IMAGE_TAG) \
-		--tag $(DOCKER_USER)/$(IMAGE_NAME):$$(date +%Y%m%d) \
+		--tag $(DOCKER_USER)/$(IMAGE_NAME):$(VERSION) \
+		--build-arg VERSION=$(VERSION) \
 		--load \
 		.
 	@echo "Multi-architecture build complete"
@@ -50,7 +52,8 @@ push:
 	docker buildx build \
 		--platform linux/amd64,linux/arm64 \
 		--tag $(DOCKER_USER)/$(IMAGE_NAME):$(IMAGE_TAG) \
-		--tag $(DOCKER_USER)/$(IMAGE_NAME):$$(date +%Y%m%d) \
+		--tag $(DOCKER_USER)/$(IMAGE_NAME):$(VERSION) \
+		--build-arg VERSION=$(VERSION) \
 		--push \
 		.
 	@echo "Images pushed successfully to $(DOCKER_USER)/$(IMAGE_NAME)"
