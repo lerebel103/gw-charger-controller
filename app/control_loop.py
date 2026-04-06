@@ -26,7 +26,8 @@ _ECO_DAY_RAMP_STEP_W = 200.0  # ramp step per control loop iteration
 _ECO_DAY_COOLDOWN_S = 300.0  # 5 min cooldown after eco day charging stops before restarting
 
 _EV_MAX_SOC_DEFAULT = 80.0  # reset value on disconnect
-_EV_MAX_SOC_MARGIN_PCT = 0.1  # stop charging this much below the target to account for SOC reporting lag
+_EV_MAX_SOC_MARGIN_PCT = 0.1
+_STOPPING_MIN_DELAY_S = 10.0  # minimum time between stopping and stopped events  # stop charging this much below the target to account for SOC reporting lag
 _EV_SOC_STALE_S = 300.0  # 5 minutes — treat SOC as unavailable if not updated
 
 
@@ -128,6 +129,10 @@ class ControlLoop:
         self._prev_ev_connected: bool | None = None  # None triggers initial state log
         self._eco_charging: bool = False
         self._eco_day_setpoint_w: float = _MIN_CHARGE_W
+        self._charging_state: str = "idle"  # idle | charging | stopping
+        self._stopping_at: float | None = None  # monotonic time when stopping event was emitted
+        self._stopping_reason: str | None = None
+        self._last_positive_setpoint: float = _MIN_CHARGE_W
         self._eco_day_stopped_at: float | None = None  # monotonic time when eco day last stopped
 
         # Rolling sample buffers: list of (monotonic_time, value) tuples
@@ -395,6 +400,117 @@ class ControlLoop:
 
     # --- Shared helpers ---
 
+    def _apply_charging_events(self, setpoint: float) -> float:
+        """Track charging state transitions, emit events, and possibly override setpoint.
+
+        The stopping event is emitted BEFORE the setpoint goes to zero, and the
+        charger continues at the previous setpoint for at least 10s. This gives
+        other systems time to react to the upcoming power change.
+
+        Returns the (possibly overridden) setpoint to actually write.
+        """
+        state = self._state
+        wants_to_charge = setpoint > 0
+
+        if self._charging_state == "idle":
+            if wants_to_charge:
+                self._charging_state = "charging"
+                self._last_positive_setpoint = setpoint
+                self._publish_queue.put_nowait({
+                    "type": "charging_event",
+                    "event": "started",
+                    "mode": state.charge_mode,
+                    "setpoint_w": setpoint,
+                })
+                logger.info("Charging event: started (mode=%s, setpoint=%.0f W)", state.charge_mode, setpoint)
+            return setpoint
+
+        if self._charging_state == "charging":
+            if wants_to_charge:
+                self._last_positive_setpoint = setpoint
+                return setpoint
+            # Wants to stop — emit stopping, but keep charging at previous setpoint
+            reason = self._determine_stop_reason()
+            self._charging_state = "stopping"
+            self._stopping_at = _time.monotonic()
+            self._stopping_reason = reason
+            self._publish_queue.put_nowait({
+                "type": "charging_event",
+                "event": "stopping",
+                "mode": state.charge_mode,
+                "reason": reason,
+                "setpoint_w": self._last_positive_setpoint,
+                "active_power_w": state.ev_active_power_w or 0,
+            })
+            logger.info("Charging event: stopping (reason=%s), holding setpoint for %.0f s",
+                        reason, _STOPPING_MIN_DELAY_S)
+            return self._last_positive_setpoint  # override: keep charging
+
+        if self._charging_state == "stopping":
+            if wants_to_charge:
+                # Condition cleared — cancel the stop, resume charging
+                self._charging_state = "charging"
+                self._last_positive_setpoint = setpoint
+                self._stopping_at = None
+                self._stopping_reason = None
+                self._publish_queue.put_nowait({
+                    "type": "charging_event",
+                    "event": "started",
+                    "mode": state.charge_mode,
+                    "setpoint_w": setpoint,
+                })
+                logger.info("Charging event: started (resumed, mode=%s)", state.charge_mode)
+                return setpoint
+
+            elapsed = _time.monotonic() - (self._stopping_at or 0)
+            if elapsed < _STOPPING_MIN_DELAY_S:
+                # Still in grace period — keep charging at previous setpoint
+                return self._last_positive_setpoint
+
+            # Grace period elapsed — actually stop now, emit stopped
+            self._charging_state = "idle"
+            ev_soc = self._get_ev_soc()
+            self._publish_queue.put_nowait({
+                "type": "charging_event",
+                "event": "stopped",
+                "mode": state.charge_mode,
+                "reason": self._stopping_reason or "unknown",
+                "session_energy_wh": state.ev_session_energy_wh,
+                "ev_soc_pct": ev_soc,
+            })
+            logger.info("Charging event: stopped (reason=%s, session=%.0f Wh)",
+                        self._stopping_reason, state.ev_session_energy_wh or 0)
+            self._stopping_at = None
+            self._stopping_reason = None
+            return 0.0  # now actually stop
+
+        return setpoint
+
+    def _determine_stop_reason(self) -> str:
+        """Determine why charging is stopping based on current state."""
+        state = self._state
+        ev_soc = self._get_ev_soc()
+
+        if ev_soc is not None and ev_soc >= (state.ev_max_soc_pct - _EV_MAX_SOC_MARGIN_PCT):
+            return "max_soc_reached"
+        if not state.ev_connected:
+            return "vehicle_disconnected"
+        if state.charge_mode == "Standby":
+            return "standby"
+        if state.charge_mode == "Eco" and not self._victron_client.connected:
+            return "victron_down"
+        if state.charge_mode == "Eco" and not is_within_discharge_window(state):
+            # Eco day reasons
+            if state.solar_battery_soc_pct is not None and state.solar_battery_soc_pct < state.eco_day_min_battery_soc_pct:
+                return "eco_day_soc_gate"
+            mean_battery = self._mean_battery_power()
+            if mean_battery is not None and mean_battery < state.solar_battery_day_power_limit_w:
+                return "eco_day_mean_battery"
+            return "eco_day_conditions"
+        if state.charge_mode == "Eco" and is_within_discharge_window(state):
+            return "eco_night_floor"
+        return "unknown"
+
     def _limit_battery_discharge(self, setpoint: float, max_discharge_w: float) -> float:
         """Reduce setpoint if home battery discharge exceeds the allowed limit.
 
@@ -445,15 +561,20 @@ class ControlLoop:
                 self._publish_queue.put_nowait("republish_config")
             self._prev_ev_connected = self._state.ev_connected
 
-            # 4. Compute setpoint, ensure charger enabled, write
+            # 4. Compute setpoint
             setpoint = self._compute_setpoint()
+
+            # 5. Charging event state machine (may override setpoint for stopping grace period)
+            setpoint = self._apply_charging_events(setpoint)
+
+            # 6. Ensure charger enabled and write setpoint
             if self._state.ev_connected:
                 # await self._ev_client.ensure_plug_and_charge()
                 await self._ev_client.ensure_enabled()
             await self._ev_client.write_setpoint(setpoint)
             self._state.commanded_setpoint_w = setpoint
 
-            # 5. Publish state snapshot
+            # 7. Publish state snapshot
             snapshot = StateSnapshot(
                 ev_connected=self._state.ev_connected,
                 ev_charger_status=self._state.ev_charger_status,

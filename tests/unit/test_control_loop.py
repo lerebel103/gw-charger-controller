@@ -20,10 +20,11 @@ from app.state import AppState
 
 def _make_loop(state: AppState, **overrides) -> ControlLoop:
     """Create a ControlLoop with mocked dependencies."""
+    import asyncio as _asyncio
     victron = MagicMock()
     victron.connected = overrides.pop("victron_connected", True)
     ev = AsyncMock()
-    queue = AsyncMock()
+    queue = _asyncio.Queue()
     return ControlLoop(state, victron, ev, queue)
 
 
@@ -775,3 +776,139 @@ class TestEvMaxSoc:
         state.ev_soc_pct_updated_at = _time.monotonic()
         cl = _make_loop(state)
         assert cl._compute_setpoint() == 7000.0
+
+
+
+class TestChargingEvents:
+    """Tests for charging event state machine (started/stopping/stopped).
+
+    Key behaviour: stopping event is emitted BEFORE setpoint goes to zero.
+    The charger continues at the previous setpoint for 10s, then stopped is emitted
+    and setpoint actually goes to zero.
+    """
+
+    def _make_state(self, **overrides):
+        defaults = dict(
+            ev_connected=True,
+            charge_mode="Manual",
+            manual_power_w=7000.0,
+            ev_active_power_w=5000.0,
+            ev_session_energy_wh=3000.0,
+        )
+        defaults.update(overrides)
+        return AppState(**defaults)
+
+    def _get_events(self, cl):
+        """Extract charging events from the publish queue."""
+        events = []
+        while not cl._publish_queue.empty():
+            item = cl._publish_queue.get_nowait()
+            if isinstance(item, dict) and item.get("type") == "charging_event":
+                events.append(item)
+        return events
+
+    def test_started_event_on_first_charge(self):
+        state = self._make_state()
+        cl = _make_loop(state)
+        cl._charging_state = "idle"
+        result = cl._apply_charging_events(7000.0)
+        assert result == 7000.0
+        events = self._get_events(cl)
+        assert len(events) == 1
+        assert events[0]["event"] == "started"
+        assert events[0]["setpoint_w"] == 7000.0
+        assert cl._charging_state == "charging"
+
+    def test_stopping_emitted_but_setpoint_held(self):
+        """When setpoint wants to go to 0, stopping is emitted but previous setpoint is returned."""
+        state = self._make_state()
+        cl = _make_loop(state)
+        cl._charging_state = "charging"
+        cl._last_positive_setpoint = 6000.0
+        result = cl._apply_charging_events(0.0)
+        assert result == 6000.0  # held at previous setpoint, NOT 0
+        events = self._get_events(cl)
+        assert len(events) == 1
+        assert events[0]["event"] == "stopping"
+        assert cl._charging_state == "stopping"
+
+    def test_setpoint_held_during_grace_period(self):
+        """During the 10s grace period, setpoint stays at previous value."""
+        state = self._make_state()
+        cl = _make_loop(state)
+        cl._charging_state = "stopping"
+        cl._stopping_at = _time.monotonic() - 5  # 5s ago
+        cl._last_positive_setpoint = 6000.0
+        cl._stopping_reason = "max_soc_reached"
+        result = cl._apply_charging_events(0.0)
+        assert result == 6000.0  # still held
+        assert cl._charging_state == "stopping"
+
+    def test_stopped_emitted_after_grace_period(self):
+        """After 10s, setpoint goes to 0 and stopped event is emitted."""
+        state = self._make_state(ev_session_energy_wh=5000.0)
+        cl = _make_loop(state)
+        cl._charging_state = "stopping"
+        cl._stopping_at = _time.monotonic() - 11  # 11s ago
+        cl._last_positive_setpoint = 6000.0
+        cl._stopping_reason = "max_soc_reached"
+        result = cl._apply_charging_events(0.0)
+        assert result == 0.0  # now actually stops
+        events = self._get_events(cl)
+        assert len(events) == 1
+        assert events[0]["event"] == "stopped"
+        assert events[0]["session_energy_wh"] == 5000.0
+        assert cl._charging_state == "idle"
+
+    def test_resume_from_stopping_cancels_stop(self):
+        """If charging resumes during grace period, cancel the stop."""
+        state = self._make_state()
+        cl = _make_loop(state)
+        cl._charging_state = "stopping"
+        cl._stopping_at = _time.monotonic() - 3
+        cl._last_positive_setpoint = 6000.0
+        cl._stopping_reason = "eco_day_conditions"
+        result = cl._apply_charging_events(7000.0)
+        assert result == 7000.0
+        events = self._get_events(cl)
+        assert len(events) == 1
+        assert events[0]["event"] == "started"
+        assert cl._charging_state == "charging"
+
+    def test_no_event_when_idle_and_not_charging(self):
+        state = self._make_state()
+        cl = _make_loop(state)
+        cl._charging_state = "idle"
+        result = cl._apply_charging_events(0.0)
+        assert result == 0.0
+        events = self._get_events(cl)
+        assert len(events) == 0
+
+    def test_no_event_when_charging_continues(self):
+        state = self._make_state()
+        cl = _make_loop(state)
+        cl._charging_state = "charging"
+        cl._last_positive_setpoint = 7000.0
+        result = cl._apply_charging_events(7000.0)
+        assert result == 7000.0
+        events = self._get_events(cl)
+        assert len(events) == 0
+
+    def test_max_soc_reason_detected(self):
+        state = self._make_state(ev_soc_pct=79.9, ev_max_soc_pct=80.0)
+        state.ev_soc_pct_updated_at = _time.monotonic()
+        cl = _make_loop(state)
+        reason = cl._determine_stop_reason()
+        assert reason == "max_soc_reached"
+
+    def test_vehicle_disconnected_reason(self):
+        state = self._make_state(ev_connected=False)
+        cl = _make_loop(state)
+        reason = cl._determine_stop_reason()
+        assert reason == "vehicle_disconnected"
+
+    def test_standby_reason(self):
+        state = self._make_state(charge_mode="Standby")
+        cl = _make_loop(state)
+        reason = cl._determine_stop_reason()
+        assert reason == "standby"

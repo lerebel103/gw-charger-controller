@@ -571,14 +571,16 @@ class MQTTClient:
             attempt += 1
 
     async def _drain_queue(self) -> None:
-        """Continuously drain the publish_queue and publish state snapshots."""
+        """Continuously drain the publish_queue and publish state/events."""
         assert self._client is not None  # noqa: S101
         while True:
             item = await self._publish_queue.get()
             try:
                 if item == "republish_config":
                     await self._publish_config_state()
-                else:
+                elif isinstance(item, dict) and item.get("type") == "charging_event":
+                    await self._publish_charging_event(item)
+                elif isinstance(item, StateSnapshot):
                     await self._publish_state(item)
             except aiomqtt.MqttError:
                 logger.warning("Failed to publish from queue")
@@ -595,6 +597,16 @@ class MQTTClient:
                 await self._handle_command(str(message.topic), str(payload))
             except Exception:
                 logger.exception("Error handling MQTT message on %s", message.topic)
+
+    async def _publish_charging_event(self, event: dict) -> None:
+        """Publish a charging event to ev_charger/event/charging."""
+        assert self._client is not None  # noqa: S101
+        payload = {k: v for k, v in event.items() if k != "type"}
+        await self._client.publish(
+            f"{_PREFIX}/event/charging",
+            json.dumps(payload),
+        )
+        logger.info("Published charging event: %s", payload.get("event"))
 
     async def shutdown(self) -> None:
         """Publish empty payloads to all discovery topics for graceful removal."""

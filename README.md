@@ -80,6 +80,53 @@ make build     # Build Docker image
 make push      # Build & push multi-arch (amd64 + arm64)
 ```
 
+## Charging Events
+
+The controller publishes JSON events to `ev_charger/event/charging` to notify other systems of charging state changes. This is useful for Home Assistant automations that need to react to power draw changes.
+
+**Topic:** `ev_charger/event/charging`
+
+### Event: started
+
+Published when charging begins (setpoint goes from 0 to a positive value).
+
+```json
+{"event": "started", "mode": "Eco", "setpoint_w": 4400}
+```
+
+### Event: stopping
+
+Published at least 10 seconds before charging actually stops. The charger continues at the current setpoint during this grace period, giving other systems time to prepare for the power change.
+
+```json
+{"event": "stopping", "mode": "Eco", "reason": "max_soc_reached", "setpoint_w": 6200, "active_power_w": 5800}
+```
+
+If the stop condition clears during the 10-second grace period (e.g. a cloud passes), the stop is cancelled and a new `started` event is emitted.
+
+### Event: stopped
+
+Published when the setpoint is actually set to zero and charging has stopped.
+
+```json
+{"event": "stopped", "mode": "Eco", "reason": "max_soc_reached", "session_energy_wh": 12400, "ev_soc_pct": 79.9}
+```
+
+When EV SOC is unavailable, `ev_soc_pct` is `null`.
+
+### Stop reasons
+
+| Reason | Description |
+|---|---|
+| `max_soc_reached` | EV SOC reached the max charge target |
+| `vehicle_disconnected` | EV was unplugged |
+| `standby` | User switched to Standby mode |
+| `victron_down` | Victron GX communications lost (Eco mode only) |
+| `eco_day_soc_gate` | Home battery SOC dropped below the daytime threshold |
+| `eco_day_mean_battery` | Sustained home battery discharge detected |
+| `eco_day_conditions` | Daytime solar conditions no longer sufficient |
+| `eco_night_floor` | Home battery at discharge floor, EV target met |
+
 ## Vehicle SOC Input
 
 The GW22K-HCA-20 does not expose the vehicle's state of charge over Modbus. To use SOC-aware features (like stopping charging when the EV reaches a target SOC during the battery discharge window), feed the SOC in externally via MQTT.
