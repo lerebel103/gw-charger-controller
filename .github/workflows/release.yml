@@ -18,7 +18,6 @@ jobs:
       - name: Generate changelog
         id: changelog
         run: |
-          # Get commits since last tag
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
           if [ -z "$PREV_TAG" ]; then
             CHANGES=$(git log --oneline --no-decorate)
@@ -30,14 +29,20 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          body: |
-            ## Changes
-            ${{ steps.changelog.outputs.changes }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BODY=$(cat <<'BODY_EOF'
+          ## Changes
+          ${{ steps.changelog.outputs.changes }}
 
-            ## Docker Image
-            ```
-            docker pull lerebel103/gw-evcharger-controller:${{ github.ref_name }}
-            ```
+          ## Docker Image
+          ```
+          docker pull lerebel103/gw-evcharger-controller:${{ github.ref_name }}
+          ```
+          BODY_EOF
+          )
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --notes "$BODY" \
+            --generate-notes
