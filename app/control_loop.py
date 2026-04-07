@@ -427,6 +427,27 @@ class ControlLoop:
             return setpoint
 
         if self._charging_state == "charging":
+            # Detect external stop: charger stopped drawing power even though
+            # setpoint is positive (e.g. car full, charger fault, car unplugged
+            # before the controller noticed)
+            ev_power = state.ev_active_power_w
+            if wants_to_charge and ev_power is not None and ev_power <= 0 and self._last_positive_setpoint > 0:
+                # Charger stopped on its own — treat as immediate stop (no grace period)
+                reason = self._determine_stop_reason()
+                if reason == "unknown":
+                    reason = "external_stop"
+                self._charging_state = "idle"
+                self._publish_queue.put_nowait({
+                    "type": "charging_event",
+                    "event": "stopped",
+                    "mode": state.charge_mode,
+                    "reason": reason,
+                    "session_energy_wh": state.ev_session_energy_wh,
+                    "ev_soc_pct": self._get_ev_soc(),
+                })
+                logger.info("Charging event: stopped (external, reason=%s)", reason)
+                return 0.0
+
             if wants_to_charge:
                 self._last_positive_setpoint = setpoint
                 return setpoint
