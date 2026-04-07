@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
 from pymodbus.client import AsyncModbusTcpClient
@@ -231,7 +230,10 @@ class EVChargerModbusClient:
         raw_lo = te_resp.registers[1]
         raw_u32 = (raw_hi << 16) | raw_lo
         self._state.ev_total_energy_wh = raw_u32 / 10.0 * 1000.0
-        logger.debug("Total energy regs: hi=%d lo=%d raw_u32=%d wh=%.0f", raw_hi, raw_lo, raw_u32, self._state.ev_total_energy_wh)
+        logger.debug(
+            "Total energy regs: hi=%d lo=%d raw_u32=%d wh=%.0f",
+            raw_hi, raw_lo, raw_u32, self._state.ev_total_energy_wh,
+        )
 
         # Car connection status (register 10075)
         cc_resp = await self._client.read_holding_registers(address=_REG_CAR_CONNECTION, count=1, slave=_SLAVE_ID)

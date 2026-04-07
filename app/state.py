@@ -57,7 +57,8 @@ class AppState:
     solar_battery_max_discharge_w: float = 6000.0
     control_loop_interval_s: float = 10.0
     eco_mean_window_minutes: int = 5  # rolling average window for eco start/stop decisions (1–10 min)
-    solar_battery_day_power_limit_w: float = -1500.0  # stop EV charging when mean battery power drops below this (W, negative = discharging)
+    # stop EV charging when mean battery power drops below this (W, negative = discharging)
+    solar_battery_day_power_limit_w: float = -1500.0
     eco_day_min_battery_soc_pct: float = 90.0  # don't start eco day EV charging until battery SOC is above this %
 
     # Device connection config

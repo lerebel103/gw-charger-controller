@@ -12,10 +12,10 @@ import traceback
 from app.config import ConfigError, ConfigManager
 from app.control_loop import ControlLoop
 from app.logging_setup import setup_logging
-from app.version import __version__
 from app.modbus_ev import EVChargerModbusClient
 from app.modbus_victron import VictronModbusClient
 from app.mqtt_client import MQTTClient
+from app.version import __version__
 
 logger = logging.getLogger(__name__)
 

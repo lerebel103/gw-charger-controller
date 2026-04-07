@@ -1,7 +1,7 @@
 services:
   gw-evcharger-controller:
-    build: .
-    image: gw-evcharger-controller:latest
+    image: lerebel103/gw-evcharger-controller:latest
+    pull_policy: always
     container_name: gw-evcharger-controller
     restart: unless-stopped
     

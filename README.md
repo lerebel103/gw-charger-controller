@@ -141,6 +141,42 @@ mosquitto_pub -h 192.168.1.10 -t ev_charger/vehicle/soc/set -m "72"
 
 This can be automated from Home Assistant using an automation that publishes the vehicle's SOC (from a car integration) to this topic on a regular interval. If no SOC update is received for 5 minutes, the value is treated as unavailable and the controller assumes the EV has not yet reached its minimum SOC target.
 
+## CI/CD
+
+The project uses GitHub Actions for continuous integration, Docker image builds, and releases.
+
+### Workflows
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| **CI** | Every push and PR to `main` | Lints with `ruff`, runs `pytest` |
+| **Build & Push Docker** | Every push (all branches and tags) | Multi-arch Docker build (amd64 + arm64). Pushes to DockerHub on `main` and version tags only. |
+| **Release** | Tag push (`v*`) | Creates a GitHub Release with auto-generated changelog and Docker pull instructions |
+
+### Required GitHub Secrets
+
+Add these in your repo under **Settings → Secrets and variables → Actions**:
+
+| Secret | Description |
+|---|---|
+| `DOCKERHUB_USERNAME` | Your DockerHub username |
+| `DOCKERHUB_TOKEN` | A DockerHub access token (not your password) |
+
+### Creating a Release
+
+```bash
+git tag -a v0.2.0 -m "Description of changes"
+git push origin v0.2.0
+```
+
+This triggers all three workflows: CI runs lint + tests, the Docker image is built and pushed with the version tag, and a GitHub Release is created automatically.
+
+### Branch Strategy
+
+- `main` is protected — no direct pushes
+- Work on feature branches, merge via pull requests
+- Every branch push gets CI checks and a Docker build (but only `main` and tags push images to DockerHub)
+
 ## Hardware
 
 - **EV Charger**: GoodWe GW22K-HCA-20 (Modbus TCP, slave ID 247, setpoint range 4400–22000 W or 0 for pause). Note: the documented minimum is 4200 W (raw 42) but in practice the charger rejects values below 4400 W (raw 44).

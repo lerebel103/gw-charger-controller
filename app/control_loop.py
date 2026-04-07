@@ -27,7 +27,7 @@ _ECO_DAY_COOLDOWN_S = 300.0  # 5 min cooldown after eco day charging stops befor
 
 _EV_MAX_SOC_DEFAULT = 80.0  # reset value on disconnect
 _EV_MAX_SOC_MARGIN_PCT = 0.1
-_STOPPING_MIN_DELAY_S = 10.0  # minimum time between stopping and stopped events  # stop charging this much below the target to account for SOC reporting lag
+_STOPPING_MIN_DELAY_S = 10.0  # min time between stopping and stopped events
 _EV_SOC_STALE_S = 300.0  # 5 minutes — treat SOC as unavailable if not updated
 
 
@@ -70,7 +70,7 @@ def is_within_discharge_window(state: AppState) -> bool:
     end = _parse_hhmm(state.solar_battery_discharge_end)
     now = datetime.now().time()  # noqa: DTZ005 — local time is intentional
 
-    if start <= end:
+    if start <= end:  # noqa: SIM108
         # Non-spanning window, e.g. 06:00–18:00
         result = start <= now < end
     else:
@@ -523,7 +523,8 @@ class ControlLoop:
             return "victron_down"
         if state.charge_mode == "Eco" and not is_within_discharge_window(state):
             # Eco day reasons
-            if state.solar_battery_soc_pct is not None and state.solar_battery_soc_pct < state.eco_day_min_battery_soc_pct:
+            soc = state.solar_battery_soc_pct
+            if soc is not None and soc < state.eco_day_min_battery_soc_pct:
                 return "eco_day_soc_gate"
             mean_battery = self._mean_battery_power()
             if mean_battery is not None and mean_battery < state.solar_battery_day_power_limit_w:

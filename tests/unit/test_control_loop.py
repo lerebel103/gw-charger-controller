@@ -5,15 +5,13 @@ from __future__ import annotations
 import time as _time
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from app.control_loop import (
-    ControlLoop,
     _ECO_DAY_COOLDOWN_S,
     _ECO_DAY_RAMP_STEP_W,
     _GRID_EXPORT_START_THRESHOLD_W,
     _MAX_CHARGE_W,
     _MIN_CHARGE_W,
+    ControlLoop,
 )
 from app.state import AppState
 
@@ -975,7 +973,7 @@ class TestChargingEvents:
         cl = _make_loop(state)
         cl._charging_state = "charging"
         cl._last_positive_setpoint = 7000.0
-        result = cl._apply_charging_events(7000.0)
+        cl._apply_charging_events(7000.0)
         events = self._get_events(cl)
         assert len(events) == 1
         assert events[0]["reason"] == "vehicle_disconnected"
@@ -986,7 +984,7 @@ class TestChargingEvents:
         cl = _make_loop(state)
         cl._charging_state = "charging"
         cl._last_positive_setpoint = 7000.0
-        result = cl._apply_charging_events(7000.0)
+        cl._apply_charging_events(7000.0)
         events = self._get_events(cl)
         assert len(events) == 0
         assert cl._charging_state == "charging"
