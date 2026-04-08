@@ -24,10 +24,12 @@ _MAX_CHARGE_W = 22000.0
 _GRID_EXPORT_START_THRESHOLD_W = -1400.0  # mean grid_power_w <= this → start charging
 _ECO_DAY_RAMP_STEP_W = 200.0  # ramp step per control loop iteration
 _ECO_DAY_COOLDOWN_S = 300.0  # 5 min cooldown after eco day charging stops before restarting
+_RAMP_DEADBAND_W = 200.0  # ignore battery power within ±200 W (parasitic draw / idle noise)
 
 _EV_MAX_SOC_DEFAULT = 80.0  # reset value on disconnect
 _EV_MAX_SOC_MARGIN_PCT = 0.1
 _STOPPING_MIN_DELAY_S = 10.0  # min time between stopping and stopped events
+_STOPPED_DELAY_S = 5.0  # delay after setpoint→0 before emitting stopped event
 _EV_SOC_STALE_S = 300.0  # 5 minutes — treat SOC as unavailable if not updated
 
 
@@ -129,9 +131,10 @@ class ControlLoop:
         self._prev_ev_connected: bool | None = None  # None triggers initial state log
         self._eco_charging: bool = False
         self._eco_day_setpoint_w: float = _MIN_CHARGE_W
-        self._charging_state: str = "idle"  # idle | charging | stopping
+        self._charging_state: str = "idle"  # idle | charging | stopping | stopped_pending
         self._stopping_at: float | None = None  # monotonic time when stopping event was emitted
         self._stopping_reason: str | None = None
+        self._stopped_at: float | None = None  # monotonic time when setpoint went to 0 (pending stopped event)
         self._last_positive_setpoint: float = _MIN_CHARGE_W
         self._start_time: float = _time.monotonic()
         self._eco_day_stopped_at: float | None = None  # monotonic time when eco day last stopped
@@ -165,12 +168,8 @@ class ControlLoop:
     def _prune_samples(self) -> None:
         """Remove samples older than the configured window."""
         cutoff = _time.monotonic() - (self._state.eco_mean_window_minutes * 60)
-        self._grid_power_samples = [
-            (t, v) for t, v in self._grid_power_samples if t >= cutoff
-        ]
-        self._battery_power_samples = [
-            (t, v) for t, v in self._battery_power_samples if t >= cutoff
-        ]
+        self._grid_power_samples = [(t, v) for t, v in self._grid_power_samples if t >= cutoff]
+        self._battery_power_samples = [(t, v) for t, v in self._battery_power_samples if t >= cutoff]
 
     def _mean_grid_power(self) -> float | None:
         """Return the mean grid power over the rolling window, or None if no samples."""
@@ -311,7 +310,11 @@ class ControlLoop:
 
         logger.debug(
             "Eco night grid fallback: EV SOC %.0f%% -> %.0f%%, need %.1f kWh in %.1f h, required %.0f W",
-            ev_soc, state.ev_min_soc_pct, energy_needed_kwh, remaining_h, required_w,
+            ev_soc,
+            state.ev_min_soc_pct,
+            energy_needed_kwh,
+            remaining_h,
+            required_w,
         )
 
         return clamp(required_w, _MIN_CHARGE_W, _MAX_CHARGE_W)
@@ -332,7 +335,8 @@ class ControlLoop:
             if self._eco_charging:
                 logger.info(
                     "Eco day: pausing charge (home battery SOC %.0f%% < threshold %.0f%%)",
-                    state.solar_battery_soc_pct, state.eco_day_min_battery_soc_pct,
+                    state.solar_battery_soc_pct,
+                    state.eco_day_min_battery_soc_pct,
                 )
                 self._eco_charging = False
             return 0.0
@@ -357,7 +361,8 @@ class ControlLoop:
                 self._eco_day_stopped_at = None
                 logger.info(
                     "Eco day: starting charge at %.0f W (mean grid=%.0f W)",
-                    self._eco_day_setpoint_w, mean_grid,
+                    self._eco_day_setpoint_w,
+                    mean_grid,
                 )
             else:
                 return 0.0
@@ -367,7 +372,9 @@ class ControlLoop:
             self._eco_day_stopped_at = _time.monotonic()
             logger.info(
                 "Eco day: stopping charge (mean battery=%.0f W, limit=%.0f W), cooldown %.0f s",
-                mean_battery, state.solar_battery_day_power_limit_w, _ECO_DAY_COOLDOWN_S,
+                mean_battery,
+                state.solar_battery_day_power_limit_w,
+                _ECO_DAY_COOLDOWN_S,
             )
             return 0.0
 
@@ -387,13 +394,16 @@ class ControlLoop:
         # battery feedback. The rolling mean stop (above) handles sustained
         # discharge. The ramp nudges the setpoint up or down by a fixed step
         # to find the sweet spot without overreacting to transients.
+        # A dead band (±_RAMP_DEADBAND_W) prevents the ramp from reacting to
+        # parasitic idle draw (~50-100 W) that the home battery shows at rest.
         battery_power = state.solar_battery_power_w
-        if battery_power is not None and battery_power < 0:
-            # Home battery is discharging — ramp down
+        if battery_power is not None and battery_power < -_RAMP_DEADBAND_W:
+            # Home battery is discharging beyond dead band — ramp down
             self._eco_day_setpoint_w -= _ECO_DAY_RAMP_STEP_W
-        else:
-            # Home battery is charging or idle — ramp up
+        elif battery_power is not None and battery_power > _RAMP_DEADBAND_W:
+            # Home battery is charging beyond dead band — ramp up
             self._eco_day_setpoint_w += _ECO_DAY_RAMP_STEP_W
+        # else: within dead band — hold steady
 
         self._eco_day_setpoint_w = clamp(self._eco_day_setpoint_w, _MIN_CHARGE_W, _MAX_CHARGE_W)
 
@@ -404,9 +414,12 @@ class ControlLoop:
     def _apply_charging_events(self, setpoint: float) -> float:
         """Track charging state transitions, emit events, and possibly override setpoint.
 
-        The stopping event is emitted BEFORE the setpoint goes to zero, and the
-        charger continues at the previous setpoint for at least 10s. This gives
-        other systems time to react to the upcoming power change.
+        State machine: idle → charging → stopping → stopped_pending → idle
+
+        - stopping: emitted BEFORE setpoint goes to zero; charger continues at
+          previous setpoint for at least 10s (grace period).
+        - stopped_pending: setpoint is 0 but the stopped event is delayed by
+          at least 5s so the charger has time to actually wind down.
 
         Returns the (possibly overridden) setpoint to actually write.
         """
@@ -417,12 +430,14 @@ class ControlLoop:
             if wants_to_charge:
                 self._charging_state = "charging"
                 self._last_positive_setpoint = setpoint
-                self._publish_queue.put_nowait({
-                    "type": "charging_event",
-                    "event": "started",
-                    "mode": state.charge_mode,
-                    "setpoint_w": setpoint,
-                })
+                self._publish_queue.put_nowait(
+                    {
+                        "type": "charging_event",
+                        "event": "started",
+                        "mode": state.charge_mode,
+                        "setpoint_w": setpoint,
+                    }
+                )
                 logger.info("Charging event: started (mode=%s, setpoint=%.0f W)", state.charge_mode, setpoint)
             return setpoint
 
@@ -432,20 +447,19 @@ class ControlLoop:
             # before the controller noticed)
             ev_power = state.ev_active_power_w
             if wants_to_charge and ev_power is not None and ev_power <= 0 and self._last_positive_setpoint > 0:
-                # Charger stopped on its own — treat as immediate stop (no grace period)
+                # Charger stopped on its own — enter stopped_pending (no grace period needed,
+                # but delay the stopped event so downstream systems don't react prematurely)
                 reason = self._determine_stop_reason()
                 if reason == "unknown":
                     reason = "external_stop"
-                self._charging_state = "idle"
-                self._publish_queue.put_nowait({
-                    "type": "charging_event",
-                    "event": "stopped",
-                    "mode": state.charge_mode,
-                    "reason": reason,
-                    "session_energy_wh": state.ev_session_energy_wh,
-                    "ev_soc_pct": self._get_ev_soc(),
-                })
-                logger.info("Charging event: stopped (external, reason=%s)", reason)
+                self._charging_state = "stopped_pending"
+                self._stopped_at = _time.monotonic()
+                self._stopping_reason = reason
+                logger.info(
+                    "Charging event: external stop detected (reason=%s), delaying stopped event %.0f s",
+                    reason,
+                    _STOPPED_DELAY_S,
+                )
                 return 0.0
 
             if wants_to_charge:
@@ -456,16 +470,19 @@ class ControlLoop:
             self._charging_state = "stopping"
             self._stopping_at = _time.monotonic()
             self._stopping_reason = reason
-            self._publish_queue.put_nowait({
-                "type": "charging_event",
-                "event": "stopping",
-                "mode": state.charge_mode,
-                "reason": reason,
-                "setpoint_w": self._last_positive_setpoint,
-                "active_power_w": state.ev_active_power_w or 0,
-            })
-            logger.info("Charging event: stopping (reason=%s), holding setpoint for %.0f s",
-                        reason, _STOPPING_MIN_DELAY_S)
+            self._publish_queue.put_nowait(
+                {
+                    "type": "charging_event",
+                    "event": "stopping",
+                    "mode": state.charge_mode,
+                    "reason": reason,
+                    "setpoint_w": self._last_positive_setpoint,
+                    "active_power_w": state.ev_active_power_w or 0,
+                }
+            )
+            logger.info(
+                "Charging event: stopping (reason=%s), holding setpoint for %.0f s", reason, _STOPPING_MIN_DELAY_S
+            )
             return self._last_positive_setpoint  # override: keep charging
 
         if self._charging_state == "stopping":
@@ -475,12 +492,14 @@ class ControlLoop:
                 self._last_positive_setpoint = setpoint
                 self._stopping_at = None
                 self._stopping_reason = None
-                self._publish_queue.put_nowait({
-                    "type": "charging_event",
-                    "event": "started",
-                    "mode": state.charge_mode,
-                    "setpoint_w": setpoint,
-                })
+                self._publish_queue.put_nowait(
+                    {
+                        "type": "charging_event",
+                        "event": "started",
+                        "mode": state.charge_mode,
+                        "setpoint_w": setpoint,
+                    }
+                )
                 logger.info("Charging event: started (resumed, mode=%s)", state.charge_mode)
                 return setpoint
 
@@ -489,22 +508,57 @@ class ControlLoop:
                 # Still in grace period — keep charging at previous setpoint
                 return self._last_positive_setpoint
 
-            # Grace period elapsed — actually stop now, emit stopped
+            # Grace period elapsed — setpoint goes to 0, enter stopped_pending
+            self._charging_state = "stopped_pending"
+            self._stopped_at = _time.monotonic()
+            logger.info("Charging event: setpoint→0, waiting %.0f s before emitting stopped", _STOPPED_DELAY_S)
+            self._stopping_at = None
+            return 0.0
+
+        if self._charging_state == "stopped_pending":
+            if wants_to_charge:
+                # Resumed before stopped event was emitted — go straight to charging
+                self._charging_state = "charging"
+                self._last_positive_setpoint = setpoint
+                self._stopped_at = None
+                self._stopping_reason = None
+                self._publish_queue.put_nowait(
+                    {
+                        "type": "charging_event",
+                        "event": "started",
+                        "mode": state.charge_mode,
+                        "setpoint_w": setpoint,
+                    }
+                )
+                logger.info("Charging event: started (resumed from stopped_pending, mode=%s)", state.charge_mode)
+                return setpoint
+
+            elapsed = _time.monotonic() - (self._stopped_at or 0)
+            if elapsed < _STOPPED_DELAY_S:
+                # Still waiting — keep setpoint at 0
+                return 0.0
+
+            # Delay elapsed — emit stopped event
             self._charging_state = "idle"
             ev_soc = self._get_ev_soc()
-            self._publish_queue.put_nowait({
-                "type": "charging_event",
-                "event": "stopped",
-                "mode": state.charge_mode,
-                "reason": self._stopping_reason or "unknown",
-                "session_energy_wh": state.ev_session_energy_wh,
-                "ev_soc_pct": ev_soc,
-            })
-            logger.info("Charging event: stopped (reason=%s, session=%.0f Wh)",
-                        self._stopping_reason, state.ev_session_energy_wh or 0)
-            self._stopping_at = None
+            self._publish_queue.put_nowait(
+                {
+                    "type": "charging_event",
+                    "event": "stopped",
+                    "mode": state.charge_mode,
+                    "reason": self._stopping_reason or "unknown",
+                    "session_energy_wh": state.ev_session_energy_wh,
+                    "ev_soc_pct": ev_soc,
+                }
+            )
+            logger.info(
+                "Charging event: stopped (reason=%s, session=%.0f Wh)",
+                self._stopping_reason,
+                state.ev_session_energy_wh or 0,
+            )
+            self._stopped_at = None
             self._stopping_reason = None
-            return 0.0  # now actually stop
+            return 0.0
 
         return setpoint
 

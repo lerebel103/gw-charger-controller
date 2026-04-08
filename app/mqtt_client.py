@@ -25,7 +25,7 @@ _DEVICE = {
     "identifiers": ["ev_charger_integration"],
     "name": "EV Charger",
     "model": "GW22K-HCA-20",
-    "manufacturer": "Goodwe",
+    "manufacturer": "lerebel103",
     "sw_version": __version__,
 }
 
@@ -405,9 +405,7 @@ class MQTTClient:
         )
 
         # Diagnostics
-        await self._client.publish(
-            f"{_PREFIX}/sensor/uptime/state", str(int(snapshot.uptime_s))
-        )
+        await self._client.publish(f"{_PREFIX}/sensor/uptime/state", str(int(snapshot.uptime_s)))
 
     async def _publish_config_state(self) -> None:
         """Publish current config/control values to their state topics."""

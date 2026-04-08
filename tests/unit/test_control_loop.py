@@ -19,6 +19,7 @@ from app.state import AppState
 def _make_loop(state: AppState, **overrides) -> ControlLoop:
     """Create a ControlLoop with mocked dependencies."""
     import asyncio as _asyncio
+
     victron = MagicMock()
     victron.connected = overrides.pop("victron_connected", True)
     ev = AsyncMock()
@@ -41,6 +42,7 @@ def _fill_battery_samples(cl: ControlLoop, value: float, count: int = 60):
 # ---------------------------------------------------------------------------
 # _compute_setpoint dispatch
 # ---------------------------------------------------------------------------
+
 
 class TestComputeSetpoint:
     def test_no_vehicle_returns_zero(self):
@@ -77,6 +79,7 @@ class TestComputeSetpoint:
 # ---------------------------------------------------------------------------
 # _setpoint_eco_day
 # ---------------------------------------------------------------------------
+
 
 class TestSetpointEcoDay:
     """Tests for eco day logic (outside discharge window)."""
@@ -528,7 +531,6 @@ class TestEcoDayRealWorldScenarios:
         result = cl._setpoint_eco_day()
         assert result == 0.0  # still in cooldown
 
-
     def test_100_no_ramp_when_ev_not_drawing_power(self):
         """When ev_active_power_w is 0 (charger starting up), hold at minimum, don't ramp."""
         state = self._make_state(
@@ -575,6 +577,35 @@ class TestEcoDayRealWorldScenarios:
         result = cl._setpoint_eco_day()
         assert result == 5000.0 + _ECO_DAY_RAMP_STEP_W  # ramped up
 
+    def test_100_deadband_holds_steady_on_idle_draw(self):
+        """Battery at -100W (parasitic idle draw) should hold setpoint, not ramp down."""
+        state = self._make_state(
+            solar_battery_soc_pct=100.0,
+            solar_battery_power_w=-100.0,  # within ±200W dead band
+            ev_active_power_w=5000.0,
+        )
+        cl = _make_loop(state)
+        cl._eco_charging = True
+        cl._eco_day_setpoint_w = 6000.0
+        _fill_grid_samples(cl, -1500.0)
+        _fill_battery_samples(cl, 1000.0)
+        result = cl._setpoint_eco_day()
+        assert result == 6000.0  # held steady, not ramped
+
+    def test_100_deadband_holds_steady_on_small_charge(self):
+        """Battery at +150W (small charge) should hold setpoint, not ramp up."""
+        state = self._make_state(
+            solar_battery_soc_pct=100.0,
+            solar_battery_power_w=150.0,  # within ±200W dead band
+            ev_active_power_w=5000.0,
+        )
+        cl = _make_loop(state)
+        cl._eco_charging = True
+        cl._eco_day_setpoint_w = 6000.0
+        _fill_grid_samples(cl, -1500.0)
+        _fill_battery_samples(cl, 1000.0)
+        result = cl._setpoint_eco_day()
+        assert result == 6000.0  # held steady, not ramped
 
 
 class TestEcoNightGridFallback:
@@ -585,7 +616,7 @@ class TestEcoNightGridFallback:
             ev_connected=True,
             charge_mode="Eco",
             solar_battery_soc_pct=20.0,  # at floor
-            solar_battery_power_w=0.0,   # battery flat (not delivering)
+            solar_battery_power_w=0.0,  # battery flat (not delivering)
             solar_battery_discharge_floor_pct=20.0,
             solar_battery_max_ev_charge_power_w=5000.0,
             solar_battery_max_discharge_w=6000.0,
@@ -635,7 +666,7 @@ class TestEcoNightGridFallback:
         """When battery is still delivering power (not flat), use normal setpoint."""
         state = self._make_state(
             solar_battery_power_w=-3000.0,  # still discharging
-            solar_battery_soc_pct=50.0,     # above floor
+            solar_battery_soc_pct=50.0,  # above floor
         )
         cl = _make_loop(state)
         result = cl._setpoint_eco_night()
@@ -678,7 +709,6 @@ class TestEcoNightGridFallback:
         cl = _make_loop(state)
         result = cl._compute_grid_fallback_setpoint(60.0)
         assert result == 0.0
-
 
 
 class TestEvMaxSoc:
@@ -759,6 +789,7 @@ class TestEvMaxSoc:
         # We test the logic directly
         if not state.ev_connected and cl._prev_ev_connected is not False:
             from app.control_loop import _EV_MAX_SOC_DEFAULT
+
             state.ev_max_soc_pct = _EV_MAX_SOC_DEFAULT
         assert state.ev_max_soc_pct == 80.0
 
@@ -774,7 +805,6 @@ class TestEvMaxSoc:
         state.ev_soc_pct_updated_at = _time.monotonic()
         cl = _make_loop(state)
         assert cl._compute_setpoint() == 7000.0
-
 
 
 class TestChargingEvents:
@@ -843,7 +873,7 @@ class TestChargingEvents:
         assert cl._charging_state == "stopping"
 
     def test_stopped_emitted_after_grace_period(self):
-        """After 10s, setpoint goes to 0 and stopped event is emitted."""
+        """After 10s grace, setpoint goes to 0 but enters stopped_pending (no event yet)."""
         state = self._make_state(ev_session_energy_wh=5000.0)
         cl = _make_loop(state)
         cl._charging_state = "stopping"
@@ -851,12 +881,52 @@ class TestChargingEvents:
         cl._last_positive_setpoint = 6000.0
         cl._stopping_reason = "max_soc_reached"
         result = cl._apply_charging_events(0.0)
-        assert result == 0.0  # now actually stops
+        assert result == 0.0  # setpoint goes to 0
+        events = self._get_events(cl)
+        assert len(events) == 0  # no stopped event yet — in stopped_pending
+        assert cl._charging_state == "stopped_pending"
+
+    def test_stopped_event_after_pending_delay(self):
+        """Stopped event emitted after 5s in stopped_pending state."""
+        state = self._make_state(ev_session_energy_wh=5000.0)
+        cl = _make_loop(state)
+        cl._charging_state = "stopped_pending"
+        cl._stopped_at = _time.monotonic() - 6  # 6s ago
+        cl._stopping_reason = "max_soc_reached"
+        result = cl._apply_charging_events(0.0)
+        assert result == 0.0
         events = self._get_events(cl)
         assert len(events) == 1
         assert events[0]["event"] == "stopped"
         assert events[0]["session_energy_wh"] == 5000.0
         assert cl._charging_state == "idle"
+
+    def test_no_stopped_event_during_pending_delay(self):
+        """No stopped event while still within the 5s pending delay."""
+        state = self._make_state()
+        cl = _make_loop(state)
+        cl._charging_state = "stopped_pending"
+        cl._stopped_at = _time.monotonic() - 2  # only 2s ago
+        cl._stopping_reason = "max_soc_reached"
+        result = cl._apply_charging_events(0.0)
+        assert result == 0.0
+        events = self._get_events(cl)
+        assert len(events) == 0
+        assert cl._charging_state == "stopped_pending"
+
+    def test_resume_from_stopped_pending(self):
+        """If charging resumes during stopped_pending, go straight to charging."""
+        state = self._make_state()
+        cl = _make_loop(state)
+        cl._charging_state = "stopped_pending"
+        cl._stopped_at = _time.monotonic() - 2
+        cl._stopping_reason = "eco_day_conditions"
+        result = cl._apply_charging_events(7000.0)
+        assert result == 7000.0
+        events = self._get_events(cl)
+        assert len(events) == 1
+        assert events[0]["event"] == "started"
+        assert cl._charging_state == "charging"
 
     def test_resume_from_stopping_cancels_stop(self):
         """If charging resumes during grace period, cancel the stop."""
@@ -911,9 +981,8 @@ class TestChargingEvents:
         reason = cl._determine_stop_reason()
         assert reason == "standby"
 
-
     def test_external_stop_when_ev_power_drops_to_zero(self):
-        """Emits stopped (no stopping) when charger stops drawing power externally."""
+        """External stop enters stopped_pending (no immediate event)."""
         state = self._make_state(ev_active_power_w=0.0, ev_session_energy_wh=8000.0)
         cl = _make_loop(state)
         cl._charging_state = "charging"
@@ -921,11 +990,9 @@ class TestChargingEvents:
         result = cl._apply_charging_events(7000.0)  # setpoint still positive
         assert result == 0.0  # overridden to 0
         events = self._get_events(cl)
-        assert len(events) == 1
-        assert events[0]["event"] == "stopped"
-        assert events[0]["reason"] == "external_stop"
-        assert events[0]["session_energy_wh"] == 8000.0
-        assert cl._charging_state == "idle"
+        assert len(events) == 0  # no event yet — in stopped_pending
+        assert cl._charging_state == "stopped_pending"
+        assert cl._stopping_reason == "external_stop"
 
     def test_no_external_stop_when_ev_power_positive(self):
         """No external stop when charger is still drawing power."""
@@ -952,9 +1019,8 @@ class TestChargingEvents:
         assert events[0]["event"] == "stopping"
         assert cl._charging_state == "stopping"
 
-
     def test_external_stop_when_power_drops_to_zero(self):
-        """Stopped event emitted when charger stops drawing power externally."""
+        """External stop enters stopped_pending when charger stops drawing power."""
         state = self._make_state(ev_active_power_w=0.0)
         cl = _make_loop(state)
         cl._charging_state = "charging"
@@ -962,21 +1028,36 @@ class TestChargingEvents:
         result = cl._apply_charging_events(7000.0)
         assert result == 0.0  # setpoint overridden to 0 since charger stopped
         events = self._get_events(cl)
-        assert len(events) == 1
-        assert events[0]["event"] == "stopped"
-        assert events[0]["reason"] == "external_stop"
-        assert cl._charging_state == "idle"
+        assert len(events) == 0  # no event yet — in stopped_pending
+        assert cl._charging_state == "stopped_pending"
 
     def test_external_stop_vehicle_disconnected(self):
-        """Stopped event with vehicle_disconnected reason when EV unplugged externally."""
+        """Stopped_pending with vehicle_disconnected reason when EV unplugged externally."""
         state = self._make_state(ev_connected=False, ev_active_power_w=0.0)
         cl = _make_loop(state)
         cl._charging_state = "charging"
         cl._last_positive_setpoint = 7000.0
         cl._apply_charging_events(7000.0)
         events = self._get_events(cl)
+        assert len(events) == 0  # no event yet — in stopped_pending
+        assert cl._charging_state == "stopped_pending"
+        assert cl._stopping_reason == "vehicle_disconnected"
+
+    def test_external_stop_emits_after_delay(self):
+        """External stop: stopped event emitted after 5s delay."""
+        state = self._make_state(ev_active_power_w=0.0, ev_session_energy_wh=8000.0)
+        cl = _make_loop(state)
+        cl._charging_state = "stopped_pending"
+        cl._stopped_at = _time.monotonic() - 6  # 6s ago
+        cl._stopping_reason = "external_stop"
+        result = cl._apply_charging_events(0.0)
+        assert result == 0.0
+        events = self._get_events(cl)
         assert len(events) == 1
-        assert events[0]["reason"] == "vehicle_disconnected"
+        assert events[0]["event"] == "stopped"
+        assert events[0]["reason"] == "external_stop"
+        assert events[0]["session_energy_wh"] == 8000.0
+        assert cl._charging_state == "idle"
 
     def test_no_external_stop_when_power_positive(self):
         """No stopped event when charger is still drawing power."""

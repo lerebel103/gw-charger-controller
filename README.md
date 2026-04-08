@@ -106,7 +106,7 @@ If the stop condition clears during the 10-second grace period (e.g. a cloud pas
 
 ### Event: stopped
 
-Published when the setpoint is actually set to zero and charging has stopped.
+Published when the setpoint is actually set to zero and charging has stopped. This event is delayed by at least 5 seconds after the setpoint goes to zero, ensuring the charger has fully wound down before other systems react.
 
 ```json
 {"event": "stopped", "mode": "Eco", "reason": "max_soc_reached", "session_energy_wh": 12400, "ev_soc_pct": 79.9}
