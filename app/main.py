@@ -47,9 +47,7 @@ async def _async_main(config_path: str) -> None:
 
     victron_client = VictronModbusClient(state)
     ev_client = EVChargerModbusClient(state)
-    control_loop = ControlLoop(
-        state, victron_client, ev_client, publish_queue, config_manager=config_manager
-    )
+    control_loop = ControlLoop(state, victron_client, ev_client, publish_queue, config_manager=config_manager)
     mqtt_client = MQTTClient(
         state,
         config_manager,

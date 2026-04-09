@@ -577,8 +577,8 @@ class TestEcoDayRealWorldScenarios:
         result = cl._setpoint_eco_day()
         assert result == 5000.0 + _ECO_DAY_RAMP_STEP_W  # ramped up
 
-    def test_100_deadband_holds_steady_on_idle_draw(self):
-        """Battery at -100W (parasitic idle draw) should hold setpoint, not ramp down."""
+    def test_100_deadband_ramps_up_on_idle_draw(self):
+        """Battery at -100W (parasitic idle draw within dead band) should ramp UP to probe solar capacity."""
         state = self._make_state(
             solar_battery_soc_pct=100.0,
             solar_battery_power_w=-100.0,  # within ±200W dead band
@@ -590,10 +590,10 @@ class TestEcoDayRealWorldScenarios:
         _fill_grid_samples(cl, -1500.0)
         _fill_battery_samples(cl, 1000.0)
         result = cl._setpoint_eco_day()
-        assert result == 6000.0  # held steady, not ramped
+        assert result == 6000.0 + _ECO_DAY_RAMP_STEP_W  # ramps up to trigger solar demand
 
-    def test_100_deadband_holds_steady_on_small_charge(self):
-        """Battery at +150W (small charge) should hold setpoint, not ramp up."""
+    def test_100_deadband_ramps_up_on_small_charge(self):
+        """Battery at +150W (small charge within dead band) should ramp UP."""
         state = self._make_state(
             solar_battery_soc_pct=100.0,
             solar_battery_power_w=150.0,  # within ±200W dead band
@@ -605,7 +605,43 @@ class TestEcoDayRealWorldScenarios:
         _fill_grid_samples(cl, -1500.0)
         _fill_battery_samples(cl, 1000.0)
         result = cl._setpoint_eco_day()
-        assert result == 6000.0  # held steady, not ramped
+        assert result == 6000.0 + _ECO_DAY_RAMP_STEP_W  # ramps up
+
+    def test_100_ramps_up_after_cloud_recovery(self):
+        """Real-world bug: after clouds pass and charging restarts, setpoint must ramp up.
+
+        Conditions: SOC 98%, battery -107W (idle parasitic), grid -1480W (exporting),
+        EV at minimum and drawing power. The old dead-band logic held steady here,
+        locking the setpoint at minimum despite clear solar excess.
+        """
+        state = self._make_state(
+            solar_battery_soc_pct=98.0,
+            solar_battery_power_w=-107.0,  # idle parasitic draw
+            grid_power_w=-1480.0,
+            ev_active_power_w=4400.0,  # charger drawing at minimum
+        )
+        cl = _make_loop(state)
+        cl._eco_charging = True
+        cl._eco_day_setpoint_w = _MIN_CHARGE_W  # stuck at minimum after restart
+        _fill_grid_samples(cl, -1480.0)
+        _fill_battery_samples(cl, -107.0)
+        result = cl._setpoint_eco_day()
+        assert result == _MIN_CHARGE_W + _ECO_DAY_RAMP_STEP_W  # must ramp up, not hold
+
+    def test_100_ramps_down_on_significant_discharge(self):
+        """Battery at -300W (beyond dead band) should ramp DOWN."""
+        state = self._make_state(
+            solar_battery_soc_pct=100.0,
+            solar_battery_power_w=-300.0,  # beyond -200W dead band
+            ev_active_power_w=5000.0,
+        )
+        cl = _make_loop(state)
+        cl._eco_charging = True
+        cl._eco_day_setpoint_w = 6000.0
+        _fill_grid_samples(cl, -1500.0)
+        _fill_battery_samples(cl, 1000.0)
+        result = cl._setpoint_eco_day()
+        assert result == 6000.0 - _ECO_DAY_RAMP_STEP_W  # ramps down
 
 
 class TestEcoNightGridFallback:

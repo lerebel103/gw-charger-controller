@@ -23,11 +23,12 @@ _MAX_CHARGE_W = 22000.0
 # Eco outside-window thresholds (applied to rolling means)
 _GRID_EXPORT_START_THRESHOLD_W = -1400.0  # mean grid_power_w <= this → start charging
 _ECO_DAY_RAMP_STEP_W = 200.0  # ramp step per control loop iteration
+_BATTERY_POWER_DEADBAND_W = 200.0  # ignore battery power within this range of zero (idle parasitic draw)
 _ECO_DAY_COOLDOWN_S = 300.0  # 5 min cooldown after eco day charging stops before restarting
 _RAMP_DEADBAND_W = 200.0  # ignore battery power within ±200 W (parasitic draw / idle noise)
 
 _EV_MAX_SOC_DEFAULT = 80.0  # reset value on disconnect
-_EV_MAX_SOC_MARGIN_PCT = 0.1
+_EV_MAX_SOC_MARGIN_PCT = 0.5
 _STOPPING_MIN_DELAY_S = 10.0  # min time between stopping and stopped events
 _STOPPED_DELAY_S = 5.0  # delay after setpoint→0 before emitting stopped event
 _EV_SOC_STALE_S = 300.0  # 5 minutes — treat SOC as unavailable if not updated
@@ -390,20 +391,30 @@ class ControlLoop:
             self._eco_day_setpoint_w = _MIN_CHARGE_W
             return _MIN_CHARGE_W
 
-        # Home battery 100%: full ramp — probe available solar capacity using
-        # battery feedback. The rolling mean stop (above) handles sustained
-        # discharge. The ramp nudges the setpoint up or down by a fixed step
-        # to find the sweet spot without overreacting to transients.
-        # A dead band (±_RAMP_DEADBAND_W) prevents the ramp from reacting to
-        # parasitic idle draw (~50-100 W) that the home battery shows at rest.
+        # Home battery ≥98%: full ramp — probe available solar capacity using
+        # battery power as feedback.  The rolling-mean stop guard (above)
+        # already handles sustained discharge, so the per-tick ramp only needs
+        # to nudge the setpoint toward the sweet spot.
+        #
+        # Dead-band logic (±_RAMP_DEADBAND_W = 200 W):
+        #   • battery discharging beyond dead band (< -200 W) → ramp DOWN
+        #   • battery within dead band (-200 … +200 W)        → ramp UP
+        #   • battery charging beyond dead band (> +200 W)     → ramp UP
+        #
+        # The key insight: idle parasitic draw (~50-100 W discharge) is normal
+        # when the battery is full.  Treating that as "hold steady" would lock
+        # the setpoint at minimum forever because the solar system ramps
+        # production on demand — we need to *increase* the setpoint to trigger
+        # that extra production.  So we ramp up whenever the battery is NOT
+        # meaningfully discharging.
         battery_power = state.solar_battery_power_w
         if battery_power is not None and battery_power < -_RAMP_DEADBAND_W:
             # Home battery is discharging beyond dead band — ramp down
             self._eco_day_setpoint_w -= _ECO_DAY_RAMP_STEP_W
-        elif battery_power is not None and battery_power > _RAMP_DEADBAND_W:
-            # Home battery is charging beyond dead band — ramp up
+        else:
+            # Battery idle, charging, or within dead band — ramp up to probe
+            # for more available solar capacity
             self._eco_day_setpoint_w += _ECO_DAY_RAMP_STEP_W
-        # else: within dead band — hold steady
 
         self._eco_day_setpoint_w = clamp(self._eco_day_setpoint_w, _MIN_CHARGE_W, _MAX_CHARGE_W)
 

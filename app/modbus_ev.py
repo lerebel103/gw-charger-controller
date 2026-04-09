@@ -70,6 +70,7 @@ class EVChargerModbusClient:
             return
 
         import time as _t
+
         now = _t.monotonic()
         if now < self._reconnect_after:
             return
@@ -178,13 +179,11 @@ class EVChargerModbusClient:
     # ------------------------------------------------------------------
 
     def _config_changed(self) -> bool:
-        return (
-            self._state.ev_charger_ip != self._connected_ip
-            or self._state.ev_charger_port != self._connected_port
-        )
+        return self._state.ev_charger_ip != self._connected_ip or self._state.ev_charger_port != self._connected_port
 
     def _schedule_retry(self) -> None:
         import time as _t
+
         delay = exponential_backoff(self._reconnect_attempt)
         self._reconnect_after = _t.monotonic() + delay
         self._reconnect_attempt += 1
@@ -232,7 +231,10 @@ class EVChargerModbusClient:
         self._state.ev_total_energy_wh = raw_u32 / 10.0 * 1000.0
         logger.debug(
             "Total energy regs: hi=%d lo=%d raw_u32=%d wh=%.0f",
-            raw_hi, raw_lo, raw_u32, self._state.ev_total_energy_wh,
+            raw_hi,
+            raw_lo,
+            raw_u32,
+            self._state.ev_total_energy_wh,
         )
 
         # Car connection status (register 10075)
@@ -246,7 +248,6 @@ class EVChargerModbusClient:
         if pnc_resp.isError():
             raise ModbusException(f"EV charger plug and charge read error: {pnc_resp}")
         self._state.ev_plug_and_charge = pnc_resp.registers[0] == 1
-
 
         # Current setpoint (register 10029)
         sp_resp = await self._client.read_holding_registers(address=_REG_MAX_CHARGING_POWER, count=1, slave=_SLAVE_ID)

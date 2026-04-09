@@ -68,6 +68,7 @@ class VictronModbusClient:
 
         # Respect backoff timing
         import time as _t
+
         now = _t.monotonic()
         if now < self._reconnect_after:
             return
@@ -104,13 +105,11 @@ class VictronModbusClient:
         self._reconnect_after = 0.0
 
     def _config_changed(self) -> bool:
-        return (
-            self._state.victron_ip != self._connected_ip
-            or self._state.victron_port != self._connected_port
-        )
+        return self._state.victron_ip != self._connected_ip or self._state.victron_port != self._connected_port
 
     def _schedule_retry(self) -> None:
         import time as _t
+
         delay = exponential_backoff(self._reconnect_attempt)
         self._reconnect_after = _t.monotonic() + delay
         self._reconnect_attempt += 1
