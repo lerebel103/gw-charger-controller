@@ -138,7 +138,7 @@ class EVChargerModbusClient:
             return
 
         try:
-            resp = await self._client.write_register(address=_REG_MAX_CHARGING_POWER, value=raw, slave=_SLAVE_ID)
+            resp = await self._client.write_register(address=_REG_MAX_CHARGING_POWER, value=raw, device_id=_SLAVE_ID)
             if resp.isError():
                 raise ModbusException(f"Setpoint write error: {resp}")
             self._state.ev_charger_setpoint_raw = raw
@@ -153,7 +153,7 @@ class EVChargerModbusClient:
         if not self.connected:
             return
         try:
-            resp = await self._client.write_register(address=_REG_PLUG_AND_CHARGE, value=1, slave=_SLAVE_ID)
+            resp = await self._client.write_register(address=_REG_PLUG_AND_CHARGE, value=1, device_id=_SLAVE_ID)
             if resp.isError():
                 raise ModbusException(f"Plug and charge write error: {resp}")
             self._state.ev_plug_and_charge = True
@@ -170,7 +170,7 @@ class EVChargerModbusClient:
         if not self.connected:
             return
         try:
-            await self._client.write_register(address=_REG_CHARGER_ENABLE, value=2, slave=_SLAVE_ID)
+            await self._client.write_register(address=_REG_CHARGER_ENABLE, value=2, device_id=_SLAVE_ID)
         except (ModbusException, OSError) as exc:
             logger.warning("Failed to write charger enable: %s", exc)
 
@@ -199,7 +199,7 @@ class EVChargerModbusClient:
 
         # Contiguous block: registers 10009–10017 (9 registers)
         main_resp = await self._client.read_holding_registers(
-            address=_REG_PHASE_A_VOLTAGE, count=_CONTIGUOUS_COUNT, slave=_SLAVE_ID
+            address=_REG_PHASE_A_VOLTAGE, count=_CONTIGUOUS_COUNT, device_id=_SLAVE_ID
         )
         if main_resp.isError():
             raise ModbusException(f"EV charger main register read error: {main_resp}")
@@ -216,13 +216,13 @@ class EVChargerModbusClient:
         self._state.ev_charger_status = regs[8]
 
         # Completion time (register 10031)
-        ct_resp = await self._client.read_holding_registers(address=_REG_COMPLETION_TIME, count=1, slave=_SLAVE_ID)
+        ct_resp = await self._client.read_holding_registers(address=_REG_COMPLETION_TIME, count=1, device_id=_SLAVE_ID)
         if ct_resp.isError():
             raise ModbusException(f"EV charger completion time read error: {ct_resp}")
         self._state.ev_completion_time_h = ct_resp.registers[0]
 
         # Total accumulated energy (registers 10065-10066, U32)
-        te_resp = await self._client.read_holding_registers(address=_REG_TOTAL_ENERGY, count=2, slave=_SLAVE_ID)
+        te_resp = await self._client.read_holding_registers(address=_REG_TOTAL_ENERGY, count=2, device_id=_SLAVE_ID)
         if te_resp.isError():
             raise ModbusException(f"EV charger total energy read error: {te_resp}")
         raw_hi = te_resp.registers[0]
@@ -238,19 +238,21 @@ class EVChargerModbusClient:
         )
 
         # Car connection status (register 10075)
-        cc_resp = await self._client.read_holding_registers(address=_REG_CAR_CONNECTION, count=1, slave=_SLAVE_ID)
+        cc_resp = await self._client.read_holding_registers(address=_REG_CAR_CONNECTION, count=1, device_id=_SLAVE_ID)
         if cc_resp.isError():
             raise ModbusException(f"EV charger car connection read error: {cc_resp}")
         self._state.ev_connected = cc_resp.registers[0] != 0
 
         # Plug and charge state (register 10019)
-        pnc_resp = await self._client.read_holding_registers(address=_REG_PLUG_AND_CHARGE, count=1, slave=_SLAVE_ID)
+        pnc_resp = await self._client.read_holding_registers(address=_REG_PLUG_AND_CHARGE, count=1, device_id=_SLAVE_ID)
         if pnc_resp.isError():
             raise ModbusException(f"EV charger plug and charge read error: {pnc_resp}")
         self._state.ev_plug_and_charge = pnc_resp.registers[0] == 1
 
         # Current setpoint (register 10029)
-        sp_resp = await self._client.read_holding_registers(address=_REG_MAX_CHARGING_POWER, count=1, slave=_SLAVE_ID)
+        sp_resp = await self._client.read_holding_registers(
+            address=_REG_MAX_CHARGING_POWER, count=1, device_id=_SLAVE_ID
+        )
         if sp_resp.isError():
             raise ModbusException(f"EV charger setpoint read error: {sp_resp}")
         self._state.ev_charger_setpoint_raw = sp_resp.registers[0]

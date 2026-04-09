@@ -124,13 +124,13 @@ class VictronModbusClient:
         assert self._client is not None  # noqa: S101
 
         grid_resp = await self._client.read_holding_registers(
-            address=_REG_GRID_L1_POWER, count=3, slave=_SYSTEM_UNIT_ID
+            address=_REG_GRID_L1_POWER, count=3, device_id=_SYSTEM_UNIT_ID
         )
         if grid_resp.isError():
             raise ModbusException(f"Grid power read error: {grid_resp}")
 
         batt_resp = await self._client.read_holding_registers(
-            address=_REG_BATTERY_POWER, count=2, slave=_SYSTEM_UNIT_ID
+            address=_REG_BATTERY_POWER, count=2, device_id=_SYSTEM_UNIT_ID
         )
         if batt_resp.isError():
             raise ModbusException(f"Battery read error: {batt_resp}")
@@ -148,19 +148,19 @@ class VictronModbusClient:
         grid_meter_unit = self._state.victron_grid_meter_unit_id
 
         v1_resp = await self._client.read_holding_registers(
-            address=_REG_GRID_L1_VOLTAGE, count=1, slave=grid_meter_unit
+            address=_REG_GRID_L1_VOLTAGE, count=1, device_id=grid_meter_unit
         )
         if v1_resp.isError():
             raise ModbusException(f"Grid L1 voltage read error: {v1_resp}")
 
         v2_resp = await self._client.read_holding_registers(
-            address=_REG_GRID_L2_VOLTAGE, count=1, slave=grid_meter_unit
+            address=_REG_GRID_L2_VOLTAGE, count=1, device_id=grid_meter_unit
         )
         if v2_resp.isError():
             raise ModbusException(f"Grid L2 voltage read error: {v2_resp}")
 
         v3_resp = await self._client.read_holding_registers(
-            address=_REG_GRID_L3_VOLTAGE, count=1, slave=grid_meter_unit
+            address=_REG_GRID_L3_VOLTAGE, count=1, device_id=grid_meter_unit
         )
         if v3_resp.isError():
             raise ModbusException(f"Grid L3 voltage read error: {v3_resp}")

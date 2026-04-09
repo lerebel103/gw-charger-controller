@@ -337,7 +337,7 @@ class TestEVChargerModbusClient:
 
         await ec.write_setpoint(5000)
 
-        mock_client.write_register.assert_called_once_with(address=10029, value=50, slave=247)
+        mock_client.write_register.assert_called_once_with(address=10029, value=50, device_id=247)
 
     @pytest.mark.asyncio
     async def test_write_setpoint_low_value(self):
@@ -354,7 +354,7 @@ class TestEVChargerModbusClient:
         # 500W → raw = round(500/100) = 5, but min is 42 (4.2 kW)
         await ec.write_setpoint(500)
 
-        mock_client.write_register.assert_called_once_with(address=10029, value=44, slave=247)
+        mock_client.write_register.assert_called_once_with(address=10029, value=44, device_id=247)
 
     @pytest.mark.asyncio
     async def test_write_setpoint_skips_when_not_connected(self):
