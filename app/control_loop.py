@@ -139,6 +139,7 @@ class ControlLoop:
         self._last_positive_setpoint: float = _MIN_CHARGE_W
         self._start_time: float = _time.monotonic()
         self._eco_day_stopped_at: float | None = None  # monotonic time when eco day last stopped
+        self._standby_write_quiet: bool = False  # once standby reached, suppress further EV Modbus writes
 
         # Rolling sample buffers: list of (monotonic_time, value) tuples
         self._grid_power_samples: list[tuple[float, float]] = []
@@ -614,6 +615,33 @@ class ControlLoop:
                 setpoint = clamp(setpoint, _MIN_CHARGE_W, _MAX_CHARGE_W)
         return setpoint
 
+    def _should_suppress_ev_writes(self, setpoint: float) -> bool:
+        """Return True when EV Modbus writes should be suppressed in steady standby.
+
+        Behaviour:
+        - Outside standby: never suppress and clear standby latch.
+        - In standby while still commanding charging (> 0): never suppress and clear latch.
+        - In standby at setpoint 0: allow writes until charger setpoint reaches 0,
+          then latch suppression and keep writes disabled until leaving standby.
+        """
+        if self._state.charge_mode != "Standby":
+            self._standby_write_quiet = False
+            return False
+
+        if setpoint > 0:
+            self._standby_write_quiet = False
+            return False
+
+        if self._standby_write_quiet:
+            return True
+
+        if self._state.ev_charger_setpoint_raw == 0:
+            self._standby_write_quiet = True
+            logger.info("Standby reached — suppressing further EV Modbus writes")
+            return True
+
+        return False
+
     # ------------------------------------------------------------------
     # Task 6.9 — Run loop
     # ------------------------------------------------------------------
@@ -655,14 +683,20 @@ class ControlLoop:
             # 5. Charging event state machine (may override setpoint for stopping grace period)
             setpoint = self._apply_charging_events(setpoint)
 
-            # 6. Ensure charger enabled and write setpoint
-            if self._state.ev_connected:
+            # 6. In standby, stop writing once standby setpoint has been applied.
+            suppress_ev_writes = self._should_suppress_ev_writes(setpoint)
+
+            # 7. Ensure charger enabled and write setpoint
+            # Keep charger enable writes for active charging, but avoid standby spam.
+            if self._state.ev_connected and (self._state.charge_mode != "Standby" or setpoint > 0):
                 # await self._ev_client.ensure_plug_and_charge()
                 await self._ev_client.ensure_enabled()
-            await self._ev_client.write_setpoint(setpoint)
+
+            if not suppress_ev_writes:
+                await self._ev_client.write_setpoint(setpoint)
             self._state.commanded_setpoint_w = setpoint
 
-            # 7. Publish state snapshot
+            # 8. Publish state snapshot
             snapshot = StateSnapshot(
                 ev_connected=self._state.ev_connected,
                 ev_charger_status=self._state.ev_charger_status,

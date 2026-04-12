@@ -1105,3 +1105,46 @@ class TestChargingEvents:
         events = self._get_events(cl)
         assert len(events) == 0
         assert cl._charging_state == "charging"
+
+
+class TestStandbyWriteSuppression:
+    def _make_state(self, **overrides):
+        defaults = dict(
+            ev_connected=True,
+            charge_mode="Standby",
+            ev_charger_setpoint_raw=44,
+        )
+        defaults.update(overrides)
+        return AppState(**defaults)
+
+    def test_not_suppressed_until_setpoint_zero_applied(self):
+        state = self._make_state(ev_charger_setpoint_raw=44)
+        cl = _make_loop(state)
+        assert cl._should_suppress_ev_writes(0.0) is False
+
+    def test_suppressed_once_standby_reached(self):
+        state = self._make_state(ev_charger_setpoint_raw=0)
+        cl = _make_loop(state)
+        assert cl._should_suppress_ev_writes(0.0) is True
+
+    def test_latch_keeps_suppressing_in_standby(self):
+        state = self._make_state(ev_charger_setpoint_raw=0)
+        cl = _make_loop(state)
+        assert cl._should_suppress_ev_writes(0.0) is True
+
+        # Firmware may change its own setpoint later; controller stays quiet.
+        state.ev_charger_setpoint_raw = 60
+        assert cl._should_suppress_ev_writes(0.0) is True
+
+    def test_leaving_standby_clears_latch(self):
+        state = self._make_state(ev_charger_setpoint_raw=0)
+        cl = _make_loop(state)
+        assert cl._should_suppress_ev_writes(0.0) is True
+
+        state.charge_mode = "Eco"
+        assert cl._should_suppress_ev_writes(4400.0) is False
+
+    def test_positive_setpoint_in_standby_does_not_suppress(self):
+        state = self._make_state(ev_charger_setpoint_raw=0)
+        cl = _make_loop(state)
+        assert cl._should_suppress_ev_writes(5000.0) is False
