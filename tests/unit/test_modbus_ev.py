@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.modbus_ev import EVChargerModbusClient
-from app.state import AppState
+from app.state import AppState, ChargerStatus
 
 # ---------------------------------------------------------------------------
 # Helper: build a fake Modbus response
@@ -132,6 +132,8 @@ class TestEVChargerModbusClient:
         assert state.ev_active_power_w == 11000.0
         assert state.ev_session_energy_wh == 5000.0
         assert state.ev_charger_status == 3
+        assert state.ev_charger_status_enum == ChargerStatus.CHARGING_IN_PROGRESS
+        assert state.ev_charger_status_enum.display_name == "Charging in progress"
         assert state.ev_completion_time_h == 2
         assert state.ev_total_energy_wh == 150000.0
         assert state.ev_connected is True
@@ -167,6 +169,37 @@ class TestEVChargerModbusClient:
 
         await ec._read_registers()
         assert state.ev_connected is False
+
+    @pytest.mark.asyncio
+    async def test_read_registers_unknown_status_maps_to_unknown(self):
+        state = self._make_state()
+        ec = EVChargerModbusClient(state)
+        mock_client = AsyncMock()
+        ec._client = mock_client
+
+        # 10017=42 is not in the known status table.
+        main_resp = _make_response([0, 0, 0, 0, 0, 0, 0, 0, 42])
+        ct_resp = _make_response([0])
+        te_resp = _make_response([0, 0])
+        cc_resp = _make_response([0])
+
+        mock_client.read_holding_registers = AsyncMock(
+            side_effect=[
+                main_resp,
+                ct_resp,
+                te_resp,
+                cc_resp,
+                _make_response([1]),
+                _make_response([2]),
+                _make_response([0]),
+            ]
+        )
+
+        await ec._read_registers()
+
+        assert state.ev_charger_status == 42
+        assert state.ev_charger_status_enum == ChargerStatus.UNKNOWN
+        assert state.ev_charger_status_enum.display_name == "Unknown"
 
     @pytest.mark.asyncio
     async def test_read_registers_main_error_raises(self):

@@ -13,7 +13,7 @@ import aiomqtt
 from app.backoff import exponential_backoff
 from app.config import ConfigManager
 from app.control_loop import normalise_hhmm, validate_hhmm
-from app.state import AppState, StateSnapshot
+from app.state import AppState, ChargerStatus, StateSnapshot
 from app.version import __version__
 
 logger = logging.getLogger(__name__)
@@ -42,10 +42,11 @@ def _sensor(
     unique_id: str,
     name: str,
     slug: str,
-    unit: str,
+    unit: str | None,
     device_class: str | None = None,
     state_class: str | None = None,
     entity_category: str | None = None,
+    options: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build a sensor entity definition."""
     d: dict[str, Any] = {
@@ -53,15 +54,18 @@ def _sensor(
         "unique_id": unique_id,
         "name": name,
         "state_topic": f"{_PREFIX}/sensor/{slug}/state",
-        "unit_of_measurement": unit,
         "force_update": True,
     }
+    if unit is not None:
+        d["unit_of_measurement"] = unit
     if device_class:
         d["device_class"] = device_class
     if state_class:
         d["state_class"] = state_class
     if entity_category:
         d["entity_category"] = entity_category
+    if options:
+        d["options"] = options
     return d
 
 
@@ -156,6 +160,7 @@ ENTITIES: list[dict[str, Any]] = [
     _sensor("ev_charger_l3_voltage_drop", "L3 Voltage Drop %", "l3_voltage_drop_perc", "%", None, "measurement"),
     _sensor("ev_charger_completion_time", "Completion Time", "completion_time", "h", None, "measurement"),
     _sensor("ev_charger_soc", "EV SOC", "ev_soc", "%", "battery", "measurement"),
+    _sensor("ev_charger_status", "Charger Status", "status", None, "enum", None, None, ChargerStatus.ha_options()),
     _sensor("ev_charger_uptime", "Controller Uptime", "uptime", "s", None, "total_increasing", "diagnostic"),
     # Binary sensors
     _binary_sensor("ev_charger_connected", "EV Connected", "connected", "connectivity"),
@@ -397,6 +402,7 @@ class MQTTClient:
         )
         await self._client.publish(f"{_PREFIX}/sensor/completion_time/state", _fmt(snapshot.ev_completion_time_h))
         await self._client.publish(f"{_PREFIX}/sensor/ev_soc/state", _fmt(snapshot.ev_soc_pct))
+        await self._client.publish(f"{_PREFIX}/sensor/status/state", _fmt(snapshot.ev_charger_status_display))
 
         # Binary sensor
         await self._client.publish(

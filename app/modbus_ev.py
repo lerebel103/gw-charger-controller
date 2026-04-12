@@ -8,7 +8,7 @@ from pymodbus.client import AsyncModbusTcpClient
 from pymodbus.exceptions import ModbusException
 
 from app.backoff import exponential_backoff
-from app.state import AppState
+from app.state import AppState, ChargerStatus
 
 logger = logging.getLogger(__name__)
 
@@ -214,6 +214,7 @@ class EVChargerModbusClient:
         self._state.ev_active_power_w = regs[6] / 10.0 * 1000.0
         self._state.ev_session_energy_wh = regs[7] / 10.0 * 1000.0
         self._state.ev_charger_status = regs[8]
+        self._state.ev_charger_status_enum = ChargerStatus.from_register(regs[8])
 
         # Completion time (register 10031)
         ct_resp = await self._client.read_holding_registers(address=_REG_COMPLETION_TIME, count=1, device_id=_SLAVE_ID)

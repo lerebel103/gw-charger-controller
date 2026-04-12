@@ -4,6 +4,65 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import IntEnum
+
+
+class ChargerStatus(IntEnum):
+    """GW22K-HCA-20 charger status codes (register 10017).
+
+    These status values indicate the operational mode of the EV charger.
+    """
+
+    IDLE_NO_CONNECTOR = 0
+    IDLE_CONNECTOR_PLUGGED = 1
+    HANDSHAKING_WITH_VEHICLE = 2
+    CHARGING_IN_PROGRESS = 3
+    CHARGING_COMPLETED = 4
+    ABNORMAL_ALARM = 5
+    SCHEDULED_START = 6
+    MAINTENANCE = 7
+    START_FAILED = 8
+    SYSTEM_UPGRADE_IN_PROGRESS = 9
+    CHARGING_INTERRUPTED_INSUFFICIENT_PV_BATTERY = 10
+    UNKNOWN = 255
+
+    @classmethod
+    def from_register(cls, value: int | None) -> ChargerStatus | None:
+        """Convert register value to ChargerStatus enum.
+
+        Returns None if value is None, or the appropriate enum value.
+        For unknown values, returns Unknown status.
+        """
+        if value is None:
+            return None
+        try:
+            return cls(value)
+        except ValueError:
+            return cls.UNKNOWN
+
+    @property
+    def display_name(self) -> str:
+        """Human-readable name for the status."""
+        names = {
+            0: "Idle (no connector plugged)",
+            1: "Idle (connector plugged)",
+            2: "Handshaking with vehicle",
+            3: "Charging in progress",
+            4: "Charging completed",
+            5: "Abnormal alarm",
+            6: "Scheduled start",
+            7: "Maintenance",
+            8: "Start failed",
+            9: "System upgrade in progress",
+            10: "Charging interrupted (insufficient PV/battery power)",
+            255: "Unknown",
+        }
+        return names.get(self.value, f"Unknown ({self.value})")
+
+    @classmethod
+    def ha_options(cls) -> list[str]:
+        """Return Home Assistant enum options in stable declaration order."""
+        return [status.display_name for status in cls]
 
 
 @dataclass
@@ -21,6 +80,7 @@ class AppState:
     # EV charger readings
     ev_connected: bool = False
     ev_charger_status: int | None = None
+    ev_charger_status_enum: ChargerStatus | None = None  # decoded status for internal use
     ev_active_power_w: float | None = None
     ev_session_energy_wh: float | None = None
     ev_voltage_l1_v: float | None = None
@@ -109,6 +169,7 @@ class StateSnapshot:
 
     ev_connected: bool = False
     ev_charger_status: int | None = None
+    ev_charger_status_display: str | None = None  # human-readable status name
     ev_active_power_w: float | None = None
     ev_session_energy_wh: float | None = None
     ev_voltage_l1_v: float | None = None

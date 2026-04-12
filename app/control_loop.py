@@ -618,11 +618,15 @@ class ControlLoop:
     def _should_suppress_ev_writes(self, setpoint: float) -> bool:
         """Return True when EV Modbus writes should be suppressed in steady standby.
 
+        When True, this also signals that all EV Modbus interactions (connections,
+        reads, and writes) should be suppressed to ensure zero modbus traffic in
+        standby mode.
+
         Behaviour:
         - Outside standby: never suppress and clear standby latch.
         - In standby while still commanding charging (> 0): never suppress and clear latch.
         - In standby at setpoint 0: allow writes until charger setpoint reaches 0,
-          then latch suppression and keep writes disabled until leaving standby.
+          then latch suppression and keep all interactions disabled until leaving standby.
         """
         if self._state.charge_mode != "Standby":
             self._standby_write_quiet = False
@@ -637,7 +641,7 @@ class ControlLoop:
 
         if self._state.ev_charger_setpoint_raw == 0:
             self._standby_write_quiet = True
-            logger.info("Standby reached — suppressing further EV Modbus writes")
+            logger.info("Standby reached — suppressing all EV Modbus interactions (reads, writes, connections)")
             return True
 
         return False
@@ -651,11 +655,15 @@ class ControlLoop:
         while True:
             # 1. Ensure Modbus connections
             await self._victron_client.ensure_connected()
-            await self._ev_client.ensure_connected()
+            # Skip EV connection management in standby when fully suppressed
+            if not self._standby_write_quiet:
+                await self._ev_client.ensure_connected()
 
             # 2. Read registers from both devices
             await self._victron_client.read()
-            await self._ev_client.read()
+            # Skip EV reads in standby when fully suppressed to prevent any modbus interactions
+            if not self._standby_write_quiet:
+                await self._ev_client.read()
 
             # 3. Record rolling samples for mean calculations
             self._record_samples()
@@ -700,6 +708,9 @@ class ControlLoop:
             snapshot = StateSnapshot(
                 ev_connected=self._state.ev_connected,
                 ev_charger_status=self._state.ev_charger_status,
+                ev_charger_status_display=self._state.ev_charger_status_enum.display_name
+                if self._state.ev_charger_status_enum
+                else None,
                 ev_active_power_w=self._state.ev_active_power_w,
                 ev_session_energy_wh=self._state.ev_session_energy_wh,
                 ev_voltage_l1_v=self._state.ev_voltage_l1_v,
