@@ -70,6 +70,8 @@ victron_port: 502
 
 All other settings (charge mode, discharge window, floor %, max charge power, min EV SOC, eco mean window, etc.) are configurable from Home Assistant and persisted automatically.
 
+In practice, this charger appears to under-read current and active power by about 5.6%. Use `correction_pct` (0.0-10.0%, default 5.6%) to scale those reported values so Home Assistant readings are closer to real measurements. The correction is applied before publishing values to Home Assistant.
+
 ## Development
 
 ```bash

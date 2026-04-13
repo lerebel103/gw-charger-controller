@@ -16,6 +16,8 @@ victron_grid_meter_unit_id: 30
 # Charge mode: "Eco" or "Manual" (configurable from HA)
 charge_mode: "Eco"
 manual_power_w: 3680
+# Charger appears to under-read current/power by about 5.6%; use this to correct reported values.
+correction_pct: 5.6
 
 # Eco mode: battery discharge window (configurable from HA)
 solar_battery_discharge_start: "23:00"

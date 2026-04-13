@@ -197,6 +197,9 @@ class EVChargerModbusClient:
         """Read EV charger registers and update AppState."""
         assert self._client is not None  # noqa: S101
 
+        correction_pct = min(10.0, max(0.0, float(self._state.correction_pct)))
+        correction_factor = 1.0 + (correction_pct / 100.0)
+
         # Contiguous block: registers 10009–10017 (9 registers)
         main_resp = await self._client.read_holding_registers(
             address=_REG_PHASE_A_VOLTAGE, count=_CONTIGUOUS_COUNT, device_id=_SLAVE_ID
@@ -208,10 +211,10 @@ class EVChargerModbusClient:
         self._state.ev_voltage_l1_v = regs[0] / 10.0
         self._state.ev_voltage_l2_v = regs[1] / 10.0
         self._state.ev_voltage_l3_v = regs[2] / 10.0
-        self._state.ev_current_a = regs[3] / 10.0
-        self._state.ev_current_b = regs[4] / 10.0
-        self._state.ev_current_c = regs[5] / 10.0
-        self._state.ev_active_power_w = regs[6] / 10.0 * 1000.0
+        self._state.ev_current_a = (regs[3] / 10.0) * correction_factor
+        self._state.ev_current_b = (regs[4] / 10.0) * correction_factor
+        self._state.ev_current_c = (regs[5] / 10.0) * correction_factor
+        self._state.ev_active_power_w = (regs[6] / 10.0 * 1000.0) * correction_factor
         self._state.ev_session_energy_wh = regs[7] / 10.0 * 1000.0
         self._state.ev_charger_status = regs[8]
         self._state.ev_charger_status_enum = ChargerStatus.from_register(regs[8])

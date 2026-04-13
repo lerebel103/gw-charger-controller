@@ -120,6 +120,7 @@ class AppState:
     # stop EV charging when mean battery power drops below this (W, negative = discharging)
     solar_battery_day_power_limit_w: float = -1500.0
     eco_day_min_battery_soc_pct: float = 90.0  # don't start eco day EV charging until battery SOC is above this %
+    correction_pct: float = 5.6  # correction applied to EV current and active power readings
 
     # Device connection config
     ev_charger_ip: str = ""
@@ -151,6 +152,7 @@ PERSISTED_FIELDS: set[str] = {
     "eco_mean_window_minutes",
     "solar_battery_day_power_limit_w",
     "eco_day_min_battery_soc_pct",
+    "correction_pct",
     "ev_charger_ip",
     "ev_charger_port",
     "victron_ip",

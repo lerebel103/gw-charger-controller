@@ -126,10 +126,10 @@ class TestEVChargerModbusClient:
         assert state.ev_voltage_l1_v == 228.0
         assert state.ev_voltage_l2_v == 229.0
         assert state.ev_voltage_l3_v == 227.0
-        assert state.ev_current_a == 16.0
-        assert state.ev_current_b == 15.5
-        assert state.ev_current_c == 15.8
-        assert state.ev_active_power_w == 11000.0
+        assert state.ev_current_a == pytest.approx(16.0 * 1.056)
+        assert state.ev_current_b == pytest.approx(15.5 * 1.056)
+        assert state.ev_current_c == pytest.approx(15.8 * 1.056)
+        assert state.ev_active_power_w == pytest.approx(11000.0 * 1.056)
         assert state.ev_session_energy_wh == 5000.0
         assert state.ev_charger_status == 3
         assert state.ev_charger_status_enum == ChargerStatus.CHARGING_IN_PROGRESS
@@ -200,6 +200,36 @@ class TestEVChargerModbusClient:
         assert state.ev_charger_status == 42
         assert state.ev_charger_status_enum == ChargerStatus.UNKNOWN
         assert state.ev_charger_status_enum.display_name == "Unknown"
+
+    @pytest.mark.asyncio
+    async def test_read_registers_clamps_correction_to_valid_range(self):
+        state = self._make_state(correction_pct=20.0)
+        ec = EVChargerModbusClient(state)
+        mock_client = AsyncMock()
+        ec._client = mock_client
+
+        main_resp = _make_response([0, 0, 0, 100, 100, 100, 100, 0, 0])
+        ct_resp = _make_response([0])
+        te_resp = _make_response([0, 0])
+        cc_resp = _make_response([0])
+
+        mock_client.read_holding_registers = AsyncMock(
+            side_effect=[
+                main_resp,
+                ct_resp,
+                te_resp,
+                cc_resp,
+                _make_response([1]),
+                _make_response([2]),
+                _make_response([0]),
+            ]
+        )
+
+        await ec._read_registers()
+
+        # 20% in config is clamped to max 10%
+        assert state.ev_current_a == pytest.approx(11.0)
+        assert state.ev_active_power_w == pytest.approx(11000.0)
 
     @pytest.mark.asyncio
     async def test_read_registers_main_error_raises(self):
