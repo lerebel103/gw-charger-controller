@@ -103,6 +103,7 @@ def apply_charging_events(loop: ControlLoop, setpoint: float) -> float:
         loop._external_stop_ticks = 0
         if wants_to_charge:
             set_session_state(loop, ChargeSessionState.CHARGING)
+            loop._session_origin_mode = state.charge_mode
             loop._last_positive_setpoint = setpoint
             loop._publish_queue.put_nowait(
                 {
@@ -122,9 +123,9 @@ def apply_charging_events(loop: ControlLoop, setpoint: float) -> float:
                 reason = determine_stop_reason(loop)
                 if reason == "unknown":
                     reason = "external_stop"
+                loop._stopping_reason = reason
                 set_session_state(loop, ChargeSessionState.STOPPED_PENDING)
                 loop._stopped_at = _time.monotonic()
-                loop._stopping_reason = reason
                 loop._external_stop_ticks = 0
                 logger.info(
                     "Charging event: external stop detected (reason=%s), delaying stopped event %.0f s",
@@ -140,10 +141,10 @@ def apply_charging_events(loop: ControlLoop, setpoint: float) -> float:
             return setpoint
 
         reason = determine_stop_reason(loop)
-        set_session_state(loop, ChargeSessionState.STOPPING)
-        loop._stopping_at = _time.monotonic()
         loop._stopping_reason = reason
-        loop._external_stop_ticks = 0
+        mode_switched_during_session = loop._session_origin_mode not in {None, state.charge_mode}
+        should_reconcile_mode_switch = mode_switched_during_session and charger_is_active_or_starting(loop)
+
         loop._publish_queue.put_nowait(
             {
                 "type": "charging_event",
@@ -154,6 +155,23 @@ def apply_charging_events(loop: ControlLoop, setpoint: float) -> float:
                 "active_power_w": state.ev_active_power_w or 0,
             }
         )
+
+        if should_reconcile_mode_switch:
+            set_session_state(loop, ChargeSessionState.STOPPED_PENDING)
+            loop._stopped_at = _time.monotonic()
+            loop._stopping_at = None
+            loop._external_stop_ticks = 0
+            logger.info(
+                "Charging event: stopping (reason=%s), mode %s->%s during active state forces immediate setpoint=0",
+                reason,
+                loop._session_origin_mode,
+                state.charge_mode,
+            )
+            return 0.0
+
+        set_session_state(loop, ChargeSessionState.STOPPING)
+        loop._stopping_at = _time.monotonic()
+        loop._external_stop_ticks = 0
         logger.info("Charging event: stopping (reason=%s), holding setpoint for %.0f s", reason, _STOPPING_MIN_DELAY_S)
         return loop._last_positive_setpoint
 
@@ -161,6 +179,7 @@ def apply_charging_events(loop: ControlLoop, setpoint: float) -> float:
         loop._external_stop_ticks = 0
         if wants_to_charge:
             set_session_state(loop, ChargeSessionState.CHARGING)
+            loop._session_origin_mode = state.charge_mode
             loop._last_positive_setpoint = setpoint
             loop._stopping_at = None
             loop._stopping_reason = None
@@ -189,6 +208,7 @@ def apply_charging_events(loop: ControlLoop, setpoint: float) -> float:
         loop._external_stop_ticks = 0
         if wants_to_charge:
             set_session_state(loop, ChargeSessionState.CHARGING)
+            loop._session_origin_mode = state.charge_mode
             loop._last_positive_setpoint = setpoint
             loop._stopped_at = None
             loop._stopping_reason = None
@@ -224,6 +244,7 @@ def apply_charging_events(loop: ControlLoop, setpoint: float) -> float:
             loop._stopping_reason,
             state.ev_session_energy_wh or 0,
         )
+        loop._session_origin_mode = None
         loop._stopped_at = None
         loop._stopping_reason = None
         return 0.0

@@ -75,6 +75,7 @@ class ControlLoop:
         self._stopping_reason: str | None = None
         self._stopped_at: float | None = None
         self._last_positive_setpoint: float = _MIN_CHARGE_W
+        self._session_origin_mode: str | None = None
         self._external_stop_ticks: int = 0
         self._start_time: float = _time.monotonic()
         self._eco_day_stopped_at: float | None = None

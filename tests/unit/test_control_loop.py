@@ -888,12 +888,14 @@ class TestChargingEvents:
         assert events[0]["event"] == "started"
         assert events[0]["setpoint_w"] == 7000.0
         assert cl._charging_state == "charging"
+        assert cl._session_origin_mode == "Manual"
 
     def test_stopping_emitted_but_setpoint_held(self):
         """When setpoint wants to go to 0, stopping is emitted but previous setpoint is returned."""
         state = self._make_state()
         cl = _make_loop(state)
         cl._charging_state = "charging"
+        cl._session_origin_mode = "Manual"
         cl._last_positive_setpoint = 6000.0
         result = cl._apply_charging_events(0.0)
         assert result == 6000.0  # held at previous setpoint, NOT 0
@@ -901,6 +903,47 @@ class TestChargingEvents:
         assert len(events) == 1
         assert events[0]["event"] == "stopping"
         assert cl._charging_state == "stopping"
+
+    def test_immediate_reconcile_when_mode_changed_during_start_handshake(self):
+        """A mode switch during active/start status should force immediate setpoint=0."""
+        state = self._make_state(
+            charge_mode="Eco",
+            ev_charger_status_enum=ChargerStatus.HANDSHAKING_WITH_VEHICLE,
+        )
+        cl = _make_loop(state)
+        cl._charging_state = "charging"
+        cl._session_origin_mode = "Manual"
+        cl._last_positive_setpoint = 6000.0
+
+        result = cl._apply_charging_events(0.0)
+
+        assert result == 0.0
+        events = self._get_events(cl)
+        assert len(events) == 1
+        assert events[0]["event"] == "stopping"
+        assert cl._charging_state == "stopped_pending"
+        assert cl._stopping_at is None
+
+    def test_immediate_reconcile_when_switched_to_standby_during_handshake(self):
+        """Mode switch to Standby during active/start state should force immediate setpoint=0."""
+        state = self._make_state(
+            charge_mode="Standby",
+            ev_charger_status_enum=ChargerStatus.HANDSHAKING_WITH_VEHICLE,
+        )
+        cl = _make_loop(state)
+        cl._charging_state = "charging"
+        cl._session_origin_mode = "Manual"
+        cl._last_positive_setpoint = 7000.0
+
+        result = cl._apply_charging_events(0.0)
+
+        assert result == 0.0
+        events = self._get_events(cl)
+        assert len(events) == 1
+        assert events[0]["event"] == "stopping"
+        assert events[0]["reason"] == "standby"
+        assert cl._charging_state == "stopped_pending"
+        assert cl._stopping_at is None
 
     def test_setpoint_held_during_grace_period(self):
         """During the 10s grace period, setpoint stays at previous value."""
