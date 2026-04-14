@@ -234,6 +234,36 @@ class TestEVChargerModbusClient:
         assert state.ev_active_power_w == pytest.approx(11000.0)
 
     @pytest.mark.asyncio
+    async def test_read_registers_plug_and_charge_raw_2_maps_to_on(self):
+        state = self._make_state()
+        ec = EVChargerModbusClient(state)
+        mock_client = AsyncMock()
+        ec._client = mock_client
+
+        main_resp = _make_response([0, 0, 0, 0, 0, 0, 0, 0, 0])
+        ct_resp = _make_response([0])
+        te_resp = _make_response([0, 0])
+        cc_resp = _make_response([1])
+
+        mock_client.read_holding_registers = AsyncMock(
+            side_effect=[
+                main_resp,
+                ct_resp,
+                te_resp,
+                cc_resp,
+                _make_response([2]),
+                _make_response([0]),
+                _make_response([0]),
+            ]
+        )
+
+        await ec._read_registers()
+
+        assert state.ev_plug_and_charge_auto_start == 2
+        assert state.ev_plug_and_charge_auto_start_enum == PlugAndChargeAutoStart.ON
+        assert state.ev_plug_and_charge is True
+
+    @pytest.mark.asyncio
     async def test_read_registers_main_error_raises(self):
         state = self._make_state()
         ec = EVChargerModbusClient(state)
@@ -479,6 +509,23 @@ class TestEVChargerModbusClient:
         assert state.ev_plug_and_charge is False
 
     @pytest.mark.asyncio
+    async def test_read_plug_and_charge_auto_start_raw_2_maps_to_on(self):
+        state = self._make_state()
+        ec = EVChargerModbusClient(state)
+
+        mock_client = AsyncMock()
+        mock_client.connected = True
+        mock_client.read_holding_registers = AsyncMock(return_value=_make_response([2]))
+        ec._client = mock_client
+
+        mode = await ec.read_plug_and_charge_auto_start()
+
+        assert mode == PlugAndChargeAutoStart.ON
+        assert state.ev_plug_and_charge_auto_start == 2
+        assert state.ev_plug_and_charge_auto_start_enum == PlugAndChargeAutoStart.ON
+        assert state.ev_plug_and_charge is True
+
+    @pytest.mark.asyncio
     async def test_write_single_phase_switching_success(self):
         state = self._make_state()
         ec = EVChargerModbusClient(state)
@@ -493,6 +540,37 @@ class TestEVChargerModbusClient:
         assert ok is True
         mock_client.write_register.assert_called_once_with(address=10023, value=1, device_id=247)
         assert state.ev_single_phase_switching_enum == SinglePhaseSwitching.ENABLED
+
+    @pytest.mark.asyncio
+    async def test_write_max_charging_power_success(self):
+        state = self._make_state()
+        ec = EVChargerModbusClient(state)
+
+        mock_client = AsyncMock()
+        mock_client.connected = True
+        mock_client.write_register = AsyncMock(return_value=_make_response([]))
+        ec._client = mock_client
+
+        ok = await ec.write_max_charging_power(4200)
+
+        assert ok is True
+        mock_client.write_register.assert_called_once_with(address=10029, value=42, device_id=247)
+        assert state.ev_charger_setpoint_raw == 42
+
+    @pytest.mark.asyncio
+    async def test_read_max_charging_power_success(self):
+        state = self._make_state()
+        ec = EVChargerModbusClient(state)
+
+        mock_client = AsyncMock()
+        mock_client.connected = True
+        mock_client.read_holding_registers = AsyncMock(return_value=_make_response([220]))
+        ec._client = mock_client
+
+        value_w = await ec.read_max_charging_power()
+
+        assert value_w == 22000.0
+        assert state.ev_charger_setpoint_raw == 220
 
     # --- reconnect ---
 

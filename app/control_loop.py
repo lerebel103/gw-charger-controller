@@ -807,6 +807,9 @@ class ControlLoop:
                 ev_single_phase_switching_display=self._state.ev_single_phase_switching_enum.display_name
                 if self._state.ev_single_phase_switching_enum
                 else None,
+                ev_max_charging_power_w=(self._state.ev_charger_setpoint_raw * 100.0)
+                if self._state.ev_charger_setpoint_raw is not None
+                else None,
                 ev_active_power_w=self._state.ev_active_power_w,
                 ev_session_energy_wh=self._state.ev_session_energy_wh,
                 ev_voltage_l1_v=self._state.ev_voltage_l1_v,

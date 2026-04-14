@@ -33,6 +33,8 @@ _REG_SINGLE_PHASE_SWITCHING = 10023
 _REG_MAX_CHARGING_POWER = 10029
 _REG_CHARGER_ENABLE = 10060
 _RAW_SETPOINT_MIN = 44  # practical minimum to reliably start charging (= 4.4 kW)
+_RAW_RUNTIME_SETPOINT_MIN = 42  # documented physical minimum (= 4.2 kW)
+_RAW_SETPOINT_MAX = 220  # 22.0 kW
 
 
 class EVChargerModbusClient:
@@ -255,6 +257,28 @@ class EVChargerModbusClient:
             logger.warning("Failed to write single phase switching: %s", exc)
             return False
 
+    async def write_max_charging_power(self, power_w: float) -> bool:
+        """Write register 10029 (max charging power) using physical range 4200-22000 W."""
+        if not self.connected:
+            return False
+
+        raw = round(power_w / 100.0)
+        raw = max(_RAW_RUNTIME_SETPOINT_MIN, min(_RAW_SETPOINT_MAX, raw))
+
+        try:
+            resp = await self._client.write_register(
+                address=_REG_MAX_CHARGING_POWER,
+                value=raw,
+                device_id=_SLAVE_ID,
+            )
+            if resp.isError():
+                raise ModbusException(f"Max charging power write error: {resp}")
+            self._state.ev_charger_setpoint_raw = raw
+            return True
+        except (ModbusException, OSError) as exc:
+            logger.warning("Failed to write max charging power: %s", exc)
+            return False
+
     async def read_plug_and_charge_auto_start(self) -> PlugAndChargeAutoStart | None:
         """Read register 10019 (plug-and-charge auto start)."""
         if not self.connected:
@@ -267,7 +291,7 @@ class EVChargerModbusClient:
             mode = PlugAndChargeAutoStart.from_register(raw)
             self._state.ev_plug_and_charge_auto_start = raw
             self._state.ev_plug_and_charge_auto_start_enum = mode
-            self._state.ev_plug_and_charge = raw == 1
+            self._state.ev_plug_and_charge = mode == PlugAndChargeAutoStart.ON
             return mode
         except (ModbusException, OSError) as exc:
             logger.warning("Failed to read plug-and-charge auto start: %s", exc)
@@ -292,6 +316,25 @@ class EVChargerModbusClient:
             return mode
         except (ModbusException, OSError) as exc:
             logger.warning("Failed to read single phase switching: %s", exc)
+            return None
+
+    async def read_max_charging_power(self) -> float | None:
+        """Read register 10029 (max charging power) and return watts."""
+        if not self.connected:
+            return None
+        try:
+            resp = await self._client.read_holding_registers(
+                address=_REG_MAX_CHARGING_POWER,
+                count=1,
+                device_id=_SLAVE_ID,
+            )
+            if resp.isError():
+                raise ModbusException(f"Max charging power read error: {resp}")
+            raw = resp.registers[0]
+            self._state.ev_charger_setpoint_raw = raw
+            return raw * 100.0
+        except (ModbusException, OSError) as exc:
+            logger.warning("Failed to read max charging power: %s", exc)
             return None
 
     async def start_charging(self) -> None:
@@ -412,9 +455,10 @@ class EVChargerModbusClient:
         if pnc_resp.isError():
             raise ModbusException(f"EV charger plug and charge read error: {pnc_resp}")
         pnc_raw = pnc_resp.registers[0]
-        self._state.ev_plug_and_charge = pnc_raw == 1
+        pnc_mode = PlugAndChargeAutoStart.from_register(pnc_raw)
+        self._state.ev_plug_and_charge = pnc_mode == PlugAndChargeAutoStart.ON
         self._state.ev_plug_and_charge_auto_start = pnc_raw
-        self._state.ev_plug_and_charge_auto_start_enum = PlugAndChargeAutoStart.from_register(pnc_raw)
+        self._state.ev_plug_and_charge_auto_start_enum = pnc_mode
 
         # Single phase switching state (register 10023)
         sps_resp = await self._client.read_holding_registers(

@@ -13,453 +13,57 @@ import aiomqtt
 from app.backoff import exponential_backoff
 from app.config import ConfigManager
 from app.control_loop import normalise_hhmm, validate_hhmm
+from app.ha.constants import (
+    COMMAND_MAP as _COMMAND_MAP,
+)
+from app.ha.constants import (
+    DEPRECATED_DISCOVERY_TOPICS as _DEPRECATED_DISCOVERY_TOPICS,
+)
+from app.ha.constants import (
+    EV_RECONNECT_FIELDS as _EV_RECONNECT_FIELDS,
+)
+from app.ha.constants import (
+    NUMBER_RANGES as _NUMBER_RANGES,
+)
+from app.ha.constants import (
+    PREFIX as _PREFIX,
+)
+from app.ha.constants import (
+    RUNTIME_EV_COMMAND_FIELDS as _RUNTIME_EV_COMMAND_FIELDS,
+)
+from app.ha.constants import (
+    SELECT_OPTIONS as _SELECT_OPTIONS,
+)
+from app.ha.constants import (
+    VEHICLE_SOC_TOPIC as _VEHICLE_SOC_TOPIC,
+)
+from app.ha.constants import (
+    VICTRON_RECONNECT_FIELDS as _VICTRON_RECONNECT_FIELDS,
+)
+from app.ha.device import device_payload as _device_payload
+from app.ha.entities import CMD_TO_STATE_TOPIC as _CMD_TO_STATE_TOPIC
+from app.ha.entities import ENTITIES
+from app.ha.parsers import (
+    parse_advanced_mode_payload as _parse_advanced_mode_payload,
+)
+from app.ha.parsers import (
+    parse_max_charging_power_payload as _parse_max_charging_power_payload,
+)
+from app.ha.parsers import (
+    parse_plug_and_charge_payload as _parse_plug_and_charge_payload,
+)
+from app.ha.parsers import (
+    parse_single_phase_payload as _parse_single_phase_payload,
+)
 from app.state import (
     AdvancedChargingMode,
     AppState,
-    ChargerStatus,
     PlugAndChargeAutoStart,
     SinglePhaseSwitching,
     StateSnapshot,
 )
-from app.version import __version__
 
 logger = logging.getLogger(__name__)
-
-_PREFIX = "ev_charger"
-_VEHICLE_SOC_TOPIC = f"{_PREFIX}/vehicle/soc/set"
-
-_DEVICE_BASE = {
-    "identifiers": ["ev_charger_integration"],
-    "name": "EV Charger",
-    "model": "GW22K-HCA-20",
-    "manufacturer": "lerebel103",
-    "sw_version": __version__,
-}
-
-
-def _device_payload(state: AppState) -> dict[str, Any]:
-    """Build Home Assistant device payload, including serial when known."""
-    payload = dict(_DEVICE_BASE)
-    if state.ev_serial_number:
-        payload["serial_number"] = state.ev_serial_number
-    return payload
-
-
-# ---------------------------------------------------------------------------
-# Entity definitions — single source of truth for discovery, state, commands
-# ---------------------------------------------------------------------------
-
-# Each entity: (component, unique_id, name, extra_discovery_fields)
-# state_topic and command_topic are derived from component + slug.
-# The slug is unique_id with the common prefix stripped where applicable.
-
-
-def _sensor(
-    unique_id: str,
-    name: str,
-    slug: str,
-    unit: str | None,
-    device_class: str | None = None,
-    state_class: str | None = None,
-    entity_category: str | None = None,
-    options: list[str] | None = None,
-) -> dict[str, Any]:
-    """Build a sensor entity definition."""
-    d: dict[str, Any] = {
-        "component": "sensor",
-        "unique_id": unique_id,
-        "name": name,
-        "state_topic": f"{_PREFIX}/sensor/{slug}/state",
-        "force_update": True,
-    }
-    if unit is not None:
-        d["unit_of_measurement"] = unit
-    if device_class:
-        d["device_class"] = device_class
-    if state_class:
-        d["state_class"] = state_class
-    if entity_category:
-        d["entity_category"] = entity_category
-    if options:
-        d["options"] = options
-    return d
-
-
-def _binary_sensor(
-    unique_id: str,
-    name: str,
-    slug: str,
-    device_class: str | None = None,
-    entity_category: str | None = None,
-) -> dict[str, Any]:
-    d: dict[str, Any] = {
-        "component": "binary_sensor",
-        "unique_id": unique_id,
-        "name": name,
-        "state_topic": f"{_PREFIX}/binary_sensor/{slug}/state",
-    }
-    if device_class:
-        d["device_class"] = device_class
-    if entity_category:
-        d["entity_category"] = entity_category
-    return d
-
-
-def _switch(
-    unique_id: str,
-    name: str,
-    slug: str,
-    payload_on: str = "ON",
-    payload_off: str = "OFF",
-) -> dict[str, Any]:
-    return {
-        "component": "switch",
-        "unique_id": unique_id,
-        "name": name,
-        "state_topic": f"{_PREFIX}/switch/{slug}/state",
-        "command_topic": f"{_PREFIX}/switch/{slug}/set",
-        "payload_on": payload_on,
-        "payload_off": payload_off,
-    }
-
-
-def _select(
-    unique_id: str,
-    name: str,
-    slug: str,
-    options: list[str],
-) -> dict[str, Any]:
-    return {
-        "component": "select",
-        "unique_id": unique_id,
-        "name": name,
-        "state_topic": f"{_PREFIX}/select/{slug}/state",
-        "command_topic": f"{_PREFIX}/select/{slug}/set",
-        "options": options,
-    }
-
-
-def _number(
-    unique_id: str,
-    name: str,
-    slug: str,
-    min_val: float,
-    max_val: float,
-    step: float,
-    unit: str,
-    mode: str = "box",
-) -> dict[str, Any]:
-    d: dict[str, Any] = {
-        "component": "number",
-        "unique_id": unique_id,
-        "name": name,
-        "state_topic": f"{_PREFIX}/number/{slug}/state",
-        "command_topic": f"{_PREFIX}/number/{slug}/set",
-        "min": min_val,
-        "max": max_val,
-        "step": step,
-        "unit_of_measurement": unit,
-    }
-    if mode != "auto":
-        d["mode"] = mode
-    return d
-
-
-def _text(
-    unique_id: str,
-    name: str,
-    slug: str,
-) -> dict[str, Any]:
-    return {
-        "component": "text",
-        "unique_id": unique_id,
-        "name": name,
-        "state_topic": f"{_PREFIX}/text/{slug}/state",
-        "command_topic": f"{_PREFIX}/text/{slug}/set",
-    }
-
-
-# All entities registered with HA
-ENTITIES: list[dict[str, Any]] = [
-    # Sensors (read-only)
-    _sensor("ev_charger_power", "EV Charger Power", "power", "W", "power", "measurement"),
-    _sensor("ev_charger_session_energy", "Session Energy", "session_energy", "Wh", "energy", "total_increasing"),
-    _sensor("ev_charger_total_energy", "EV Charger Total Energy", "total_energy", "Wh", "energy", "total_increasing"),
-    _sensor("ev_charger_voltage_l1", "EV Voltage L1", "voltage_l1", "V", "voltage", "measurement"),
-    _sensor("ev_charger_voltage_l2", "EV Voltage L2", "voltage_l2", "V", "voltage", "measurement"),
-    _sensor("ev_charger_voltage_l3", "EV Voltage L3", "voltage_l3", "V", "voltage", "measurement"),
-    _sensor("ev_charger_current_l1", "EV Current L1", "current_l1", "A", "current", "measurement"),
-    _sensor("ev_charger_current_l2", "EV Current L2", "current_l2", "A", "current", "measurement"),
-    _sensor("ev_charger_current_l3", "EV Current L3", "current_l3", "A", "current", "measurement"),
-    _sensor("ev_charger_setpoint", "Charge Setpoint", "setpoint", "W", "power", "measurement"),
-    _sensor("ev_charger_l1_voltage_drop", "L1 Voltage Drop %", "l1_voltage_drop_perc", "%", None, "measurement"),
-    _sensor("ev_charger_l2_voltage_drop", "L2 Voltage Drop %", "l2_voltage_drop_perc", "%", None, "measurement"),
-    _sensor("ev_charger_l3_voltage_drop", "L3 Voltage Drop %", "l3_voltage_drop_perc", "%", None, "measurement"),
-    _sensor("ev_charger_completion_time", "Completion Time", "completion_time", "h", None, "measurement"),
-    _sensor("ev_charger_soc", "EV SOC", "ev_soc", "%", "battery", "measurement"),
-    _sensor("ev_charger_status", "Charger Status", "status", None, "enum", None, None, ChargerStatus.ha_options()),
-    _sensor("ev_charger_comm_connection_status", "Communication Connection Status", "comm_connection_status", None),
-    _sensor("ev_charger_uptime", "Controller Uptime", "uptime", "s", None, "total_increasing", "diagnostic"),
-    # Binary sensors
-    _binary_sensor("ev_charger_connected", "EV Connected", "connected", "connectivity"),
-    _binary_sensor(
-        "ev_charger_comm_wifi_router",
-        "Wi-Fi Router Connected",
-        "comm_wifi_router",
-        None,
-        "diagnostic",
-    ),
-    _binary_sensor(
-        "ev_charger_comm_iot_cloud",
-        "IoT Cloud Connected",
-        "comm_iot_cloud",
-        None,
-        "diagnostic",
-    ),
-    _binary_sensor(
-        "ev_charger_comm_inverter",
-        "Inverter Online",
-        "comm_inverter",
-        None,
-        "diagnostic",
-    ),
-    _binary_sensor(
-        "ev_charger_comm_mid_meter",
-        "MID Meter Online",
-        "comm_mid_meter",
-        None,
-        "diagnostic",
-    ),
-    _binary_sensor(
-        "ev_charger_comm_gw_meter",
-        "GW Meter Online",
-        "comm_gw_meter",
-        None,
-        "diagnostic",
-    ),
-    _binary_sensor(
-        "ev_charger_comm_ems",
-        "EMS Online",
-        "comm_ems",
-        None,
-        "diagnostic",
-    ),
-    # Select
-    _select("ev_charger_mode", "Charge Mode", "mode", ["Standby", "Eco", "Manual"]),
-    _select(
-        "ev_charger_advanced_charging_mode",
-        "Advanced Charging Mode",
-        "advanced_charging_mode",
-        AdvancedChargingMode.ha_options(),
-    ),
-    _select(
-        "ev_charger_plug_and_charge_auto_start",
-        "Plug and Charge Auto Start",
-        "plug_and_charge_auto_start",
-        PlugAndChargeAutoStart.ha_options(),
-    ),
-    # Switch
-    _switch("ev_charger_single_phase_switching", "Single Phase Switching", "single_phase_switching"),
-    # Numbers
-    _number("ev_charger_manual_power", "Manual Charge Power", "manual_power", 4400, 11000, 100, "W"),
-    _number("ev_charger_ev_min_soc", "Min EV SOC", "ev_min_soc", 0, 100, 1, "%"),
-    _number("ev_charger_ev_max_soc", "Max EV SOC", "ev_max_soc", 80, 100, 1, "%"),
-    _number("ev_charger_ev_battery_capacity", "EV Battery Capacity", "ev_battery_capacity", 10, 200, 1, "kWh"),
-    _number("ev_charger_solar_battery_floor", "Solar Batt Discharge Floor", "solar_battery_floor", 0, 100, 1, "%"),
-    _number(
-        "ev_charger_solar_battery_max_ev_charge",
-        "EV Charge Power (Batt Window)",
-        "solar_battery_max_ev_charge",
-        4400,
-        11000,
-        100,
-        "W",
-    ),
-    _number(
-        "ev_charger_solar_battery_max_discharge",
-        "Solar Batt Max Discharge",
-        "solar_battery_max_discharge",
-        0,
-        15000,
-        100,
-        "W",
-    ),
-    _number("ev_charger_port", "EV Charger Port", "ev_charger_port", 1, 65535, 1, ""),
-    _number("victron_port", "Victron GX Port", "victron_port", 1, 65535, 1, ""),
-    _number(
-        "victron_grid_meter_unit_id",
-        "Victron Grid Meter Unit ID",
-        "victron_grid_meter_unit_id",
-        1,
-        247,
-        1,
-        "",
-    ),
-    _number(
-        "ev_charger_control_loop_interval",
-        "Control Loop Interval",
-        "control_loop_interval",
-        1,
-        60,
-        1,
-        "s",
-    ),
-    _number(
-        "ev_charger_eco_mean_window",
-        "Eco Mean Window",
-        "eco_mean_window",
-        1,
-        10,
-        1,
-        "min",
-    ),
-    _number(
-        "ev_charger_solar_batt_day_limit",
-        "Solar Batt Pwr Lim (day)",
-        "solar_batt_day_limit",
-        -10000,
-        0,
-        100,
-        "W",
-    ),
-    _number(
-        "ev_charger_eco_day_min_batt_soc",
-        "Eco Day Min Batt SOC",
-        "eco_day_min_batt_soc",
-        0,
-        100,
-        1,
-        "%",
-    ),
-    _number(
-        "ev_charger_measurement_correction",
-        "EV Measurement Correction",
-        "measurement_correction",
-        0,
-        10,
-        0.1,
-        "%",
-    ),
-    # Text
-    _text("ev_charger_solar_battery_discharge_start", "Solar Batt Discharge Start", "solar_battery_discharge_start"),
-    _text("ev_charger_solar_battery_discharge_end", "Solar Batt Discharge End", "solar_battery_discharge_end"),
-    _text("ev_charger_ip", "EV Charger IP", "ev_charger_ip"),
-    _text("victron_ip", "Victron GX IP", "victron_ip"),
-]
-
-
-# ---------------------------------------------------------------------------
-# Command topic → (AppState field, type, validation) mapping
-# ---------------------------------------------------------------------------
-
-# Maps command_topic → (state_attr, value_type)
-# value_type: "float", "int", "str", "select", "hhmm"
-_COMMAND_MAP: dict[str, tuple[str, str]] = {
-    f"{_PREFIX}/select/mode/set": ("charge_mode", "select"),
-    f"{_PREFIX}/select/advanced_charging_mode/set": ("ev_advanced_charging_mode", "select"),
-    f"{_PREFIX}/select/plug_and_charge_auto_start/set": ("ev_plug_and_charge_auto_start", "select"),
-    f"{_PREFIX}/switch/single_phase_switching/set": ("ev_single_phase_switching", "switch"),
-    f"{_PREFIX}/number/manual_power/set": ("manual_power_w", "float"),
-    f"{_PREFIX}/number/ev_min_soc/set": ("ev_min_soc_pct", "float"),
-    f"{_PREFIX}/number/ev_max_soc/set": ("ev_max_soc_pct", "float"),
-    f"{_PREFIX}/number/ev_battery_capacity/set": ("ev_battery_capacity_kwh", "float"),
-    f"{_PREFIX}/number/solar_battery_floor/set": ("solar_battery_discharge_floor_pct", "float"),
-    f"{_PREFIX}/number/solar_battery_max_ev_charge/set": ("solar_battery_max_ev_charge_power_w", "float"),
-    f"{_PREFIX}/number/solar_battery_max_discharge/set": ("solar_battery_max_discharge_w", "float"),
-    f"{_PREFIX}/number/ev_charger_port/set": ("ev_charger_port", "int"),
-    f"{_PREFIX}/number/victron_port/set": ("victron_port", "int"),
-    f"{_PREFIX}/number/victron_grid_meter_unit_id/set": ("victron_grid_meter_unit_id", "int"),
-    f"{_PREFIX}/number/control_loop_interval/set": ("control_loop_interval_s", "float"),
-    f"{_PREFIX}/number/eco_mean_window/set": ("eco_mean_window_minutes", "int"),
-    f"{_PREFIX}/number/solar_batt_day_limit/set": ("solar_battery_day_power_limit_w", "float"),
-    f"{_PREFIX}/number/eco_day_min_batt_soc/set": ("eco_day_min_battery_soc_pct", "float"),
-    f"{_PREFIX}/number/measurement_correction/set": ("correction_pct", "float"),
-    f"{_PREFIX}/text/solar_battery_discharge_start/set": ("solar_battery_discharge_start", "hhmm"),
-    f"{_PREFIX}/text/solar_battery_discharge_end/set": ("solar_battery_discharge_end", "hhmm"),
-    f"{_PREFIX}/text/ev_charger_ip/set": ("ev_charger_ip", "str"),
-    f"{_PREFIX}/text/victron_ip/set": ("victron_ip", "str"),
-}
-
-# Number entity ranges for validation: state_attr → (min, max)
-_NUMBER_RANGES: dict[str, tuple[float, float]] = {
-    "manual_power_w": (4400, 11000),
-    "ev_min_soc_pct": (0, 100),
-    "ev_max_soc_pct": (80, 100),
-    "ev_battery_capacity_kwh": (10, 200),
-    "solar_battery_discharge_floor_pct": (0, 100),
-    "solar_battery_max_ev_charge_power_w": (4400, 11000),
-    "solar_battery_max_discharge_w": (0, 15000),
-    "ev_charger_port": (1, 65535),
-    "victron_port": (1, 65535),
-    "victron_grid_meter_unit_id": (1, 247),
-    "control_loop_interval_s": (1, 60),
-    "eco_mean_window_minutes": (1, 10),
-    "solar_battery_day_power_limit_w": (-10000, 0),
-    "eco_day_min_battery_soc_pct": (0, 100),
-    "correction_pct": (0, 10),
-}
-
-# Select entity valid options
-_SELECT_OPTIONS: dict[str, list[str]] = {
-    "charge_mode": ["Standby", "Eco", "Manual"],
-    "ev_advanced_charging_mode": AdvancedChargingMode.ha_options(),
-    "ev_plug_and_charge_auto_start": PlugAndChargeAutoStart.ha_options(),
-}
-
-_RUNTIME_EV_COMMAND_FIELDS = {
-    "ev_advanced_charging_mode",
-    "ev_plug_and_charge_auto_start",
-    "ev_single_phase_switching",
-}
-
-# Build reverse map: command_topic → state_topic (from ENTITIES)
-_CMD_TO_STATE_TOPIC: dict[str, str] = {e["command_topic"]: e["state_topic"] for e in ENTITIES if "command_topic" in e}
-
-# Fields that trigger a Modbus client reconnect
-_EV_RECONNECT_FIELDS = {"ev_charger_ip", "ev_charger_port"}
-_VICTRON_RECONNECT_FIELDS = {"victron_ip", "victron_port"}
-
-
-def _parse_advanced_mode_payload(payload: str) -> AdvancedChargingMode | None:
-    """Parse advanced charging mode payload from HA label or raw register value string."""
-    mode = AdvancedChargingMode.from_display_name(payload)
-    if mode is not None and mode != AdvancedChargingMode.UNKNOWN:
-        return mode
-    try:
-        raw = int(payload)
-    except (TypeError, ValueError):
-        return None
-    mode = AdvancedChargingMode.from_register(raw)
-    if mode in (None, AdvancedChargingMode.UNKNOWN):
-        return None
-    return mode
-
-
-def _parse_plug_and_charge_payload(payload: str) -> PlugAndChargeAutoStart | None:
-    """Parse plug-and-charge payload from HA label or raw register value string."""
-    mode = PlugAndChargeAutoStart.from_display_name(payload)
-    if mode is not None and mode != PlugAndChargeAutoStart.UNKNOWN:
-        return mode
-    try:
-        raw = int(payload)
-    except (TypeError, ValueError):
-        return None
-    mode = PlugAndChargeAutoStart.from_register(raw)
-    if mode in (None, PlugAndChargeAutoStart.UNKNOWN):
-        return None
-    return mode
-
-
-def _parse_single_phase_payload(payload: str) -> SinglePhaseSwitching | None:
-    """Parse single-phase switching payload from HA switch text or numeric value."""
-    mode = SinglePhaseSwitching.from_switch_payload(payload)
-    if mode is not None:
-        return mode
-    try:
-        raw = int(payload)
-    except (TypeError, ValueError):
-        return None
-    return SinglePhaseSwitching.from_register(raw)
 
 
 class MQTTClient:
@@ -488,6 +92,10 @@ class MQTTClient:
     async def _publish_discovery(self) -> None:
         """Publish HA MQTT discovery payloads for all entities."""
         assert self._client is not None  # noqa: S101
+
+        for topic in _DEPRECATED_DISCOVERY_TOPICS:
+            await self._client.publish(topic, "", retain=True)
+
         for entity in ENTITIES:
             component = entity["component"]
             unique_id = entity["unique_id"]
@@ -582,11 +190,6 @@ class MQTTClient:
             _fmt(snapshot.ev_advanced_charging_mode_display),
             retain=True,
         )
-        await self._client.publish(
-            f"{_PREFIX}/select/plug_and_charge_auto_start/state",
-            _fmt(snapshot.ev_plug_and_charge_auto_start_display),
-            retain=True,
-        )
 
         # Binary sensor
         await self._client.publish(
@@ -629,6 +232,21 @@ class MQTTClient:
             switch_state,
             retain=True,
         )
+        plug_and_charge_state = "unavailable"
+        if snapshot.ev_plug_and_charge_auto_start_display == "On":
+            plug_and_charge_state = "ON"
+        elif snapshot.ev_plug_and_charge_auto_start_display == "Off":
+            plug_and_charge_state = "OFF"
+        await self._client.publish(
+            f"{_PREFIX}/switch/plug_and_charge_auto_start/state",
+            plug_and_charge_state,
+            retain=True,
+        )
+        await self._client.publish(
+            f"{_PREFIX}/number/max_charging_power/state",
+            _fmt(snapshot.ev_max_charging_power_w),
+            retain=True,
+        )
 
         # Diagnostics
         await self._client.publish(f"{_PREFIX}/sensor/uptime/state", str(int(snapshot.uptime_s)))
@@ -663,9 +281,11 @@ class MQTTClient:
                 s.ev_advanced_charging_mode_enum.display_name if s.ev_advanced_charging_mode_enum else "unavailable",
             ),
             (
-                f"{_PREFIX}/select/plug_and_charge_auto_start/state",
-                s.ev_plug_and_charge_auto_start_enum.display_name
-                if s.ev_plug_and_charge_auto_start_enum
+                f"{_PREFIX}/switch/plug_and_charge_auto_start/state",
+                "ON"
+                if s.ev_plug_and_charge_auto_start_enum == PlugAndChargeAutoStart.ON
+                else "OFF"
+                if s.ev_plug_and_charge_auto_start_enum == PlugAndChargeAutoStart.OFF
                 else "unavailable",
             ),
             (
@@ -675,6 +295,10 @@ class MQTTClient:
                 else "OFF"
                 if s.ev_single_phase_switching_enum == SinglePhaseSwitching.DISABLED
                 else "unavailable",
+            ),
+            (
+                f"{_PREFIX}/number/max_charging_power/state",
+                str(s.ev_charger_setpoint_raw * 100.0) if s.ev_charger_setpoint_raw is not None else "unavailable",
             ),
         ]
         for topic, value in pairs:
@@ -784,6 +408,9 @@ class MQTTClient:
             logger.warning("Runtime EV command ignored (%s): EV client unavailable", attr)
             return
 
+        enum_value: AdvancedChargingMode | PlugAndChargeAutoStart | SinglePhaseSwitching | None = None
+        number_value_w: float | None = None
+
         if attr == "ev_advanced_charging_mode":
             enum_value = _parse_advanced_mode_payload(payload)
             if enum_value is None:
@@ -796,7 +423,7 @@ class MQTTClient:
         elif attr == "ev_plug_and_charge_auto_start":
             enum_value = _parse_plug_and_charge_payload(payload)
             if enum_value is None:
-                logger.warning("Invalid select value '%s' for %s", payload, attr)
+                logger.warning("Invalid switch value '%s' for %s", payload, attr)
                 return
             if self._state.ev_plug_and_charge_auto_start_enum == enum_value:
                 return
@@ -811,6 +438,18 @@ class MQTTClient:
                 return
             writer = self._ev_client.write_single_phase_switching
             reader = self._ev_client.read_single_phase_switching
+        elif attr == "ev_max_charging_power":
+            number_value_w = _parse_max_charging_power_payload(payload)
+            if number_value_w is None:
+                logger.warning("Invalid number value '%s' for %s", payload, attr)
+                return
+            current_w = (
+                self._state.ev_charger_setpoint_raw * 100.0 if self._state.ev_charger_setpoint_raw is not None else None
+            )
+            if current_w is not None and abs(current_w - number_value_w) < 0.5:
+                return
+            writer = self._ev_client.write_max_charging_power
+            reader = self._ev_client.read_max_charging_power
         else:
             logger.warning("Unsupported runtime EV select field: %s", attr)
             return
@@ -823,12 +462,24 @@ class MQTTClient:
             return
 
         try:
-            ok = await writer(enum_value)
+            if attr == "ev_max_charging_power":
+                ok = await writer(number_value_w)
+            else:
+                ok = await writer(enum_value)
             if not ok:
                 return
             confirmed = await reader()
             if attr == "ev_single_phase_switching":
                 state_value = "ON" if confirmed == SinglePhaseSwitching.ENABLED else "OFF"
+            elif attr == "ev_plug_and_charge_auto_start":
+                if confirmed == PlugAndChargeAutoStart.ON:
+                    state_value = "ON"
+                elif confirmed == PlugAndChargeAutoStart.OFF:
+                    state_value = "OFF"
+                else:
+                    state_value = "unavailable"
+            elif attr == "ev_max_charging_power":
+                state_value = str(confirmed) if confirmed is not None else "unavailable"
             else:
                 state_value = confirmed.display_name if confirmed else "unavailable"
 

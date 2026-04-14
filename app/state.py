@@ -119,6 +119,9 @@ class PlugAndChargeAutoStart(IntEnum):
         """Convert register value to PlugAndChargeAutoStart enum."""
         if value is None:
             return None
+        # Some charger firmware reports ON as 2 instead of 1.
+        if value == 2:
+            return cls.ON
         try:
             return cls(value)
         except ValueError:
@@ -315,6 +318,7 @@ class StateSnapshot:
     ev_advanced_charging_mode_display: str | None = None
     ev_plug_and_charge_auto_start_display: str | None = None
     ev_single_phase_switching_display: str | None = None
+    ev_max_charging_power_w: float | None = None
     ev_active_power_w: float | None = None
     ev_session_energy_wh: float | None = None
     ev_voltage_l1_v: float | None = None

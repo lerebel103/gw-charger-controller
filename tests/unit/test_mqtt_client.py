@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.mqtt_client import MQTTClient
+from app.ha import MQTTClient
 from app.state import AdvancedChargingMode, AppState, PlugAndChargeAutoStart, SinglePhaseSwitching
 
 
@@ -49,7 +49,7 @@ class TestMQTTRuntimeEVSelects:
         client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue, ev_client=ev)
         client._client = AsyncMock()
 
-        await client._handle_command("ev_charger/select/plug_and_charge_auto_start/set", "INVALID")
+        await client._handle_command("ev_charger/switch/plug_and_charge_auto_start/set", "INVALID")
 
         ev.ensure_connected.assert_not_awaited()
         ev.disconnect.assert_not_awaited()
@@ -70,7 +70,7 @@ class TestMQTTRuntimeEVSelects:
         client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue, ev_client=ev)
         client._client = AsyncMock()
 
-        await client._handle_command("ev_charger/select/plug_and_charge_auto_start/set", "On")
+        await client._handle_command("ev_charger/switch/plug_and_charge_auto_start/set", "ON")
 
         ev.ensure_connected.assert_awaited_once()
         ev.write_plug_and_charge_auto_start.assert_awaited_once_with(PlugAndChargeAutoStart.ON)
@@ -117,6 +117,26 @@ class TestMQTTRuntimeEVSelects:
         await client._handle_command("ev_charger/select/advanced_charging_mode/set", "2")
 
         ev.write_advanced_charging_mode.assert_awaited_once_with(AdvancedChargingMode.PV_BATTERY_HYBRID_CHARGING)
+
+    @pytest.mark.asyncio
+    async def test_runtime_advanced_mode_accepts_fast_charging_case_insensitive(self):
+        state = AppState(charge_mode="Standby")
+        cfg = MagicMock()
+        queue: asyncio.Queue = asyncio.Queue()
+        ev = AsyncMock()
+        ev.connected = True
+        ev.ensure_connected = AsyncMock()
+        ev.disconnect = AsyncMock()
+        ev.write_advanced_charging_mode = AsyncMock(return_value=True)
+        ev.read_advanced_charging_mode = AsyncMock(return_value=AdvancedChargingMode.FAST_CHARGING)
+
+        client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue, ev_client=ev)
+        client._client = AsyncMock()
+
+        await client._handle_command("ev_charger/select/advanced_charging_mode/set", "  fast charging  ")
+
+        ev.write_advanced_charging_mode.assert_awaited_once_with(AdvancedChargingMode.FAST_CHARGING)
+        ev.read_advanced_charging_mode.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_runtime_advanced_mode_noop_does_not_connect(self):
@@ -171,6 +191,46 @@ class TestMQTTRuntimeEVSelects:
         client._client = AsyncMock()
 
         await client._handle_command("ev_charger/select/advanced_charging_mode/set", "255")
+
+        ev.ensure_connected.assert_not_awaited()
+        ev.disconnect.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_runtime_max_charging_power_allowed_in_standby_with_disconnect(self):
+        state = AppState(charge_mode="Standby")
+        cfg = MagicMock()
+        queue: asyncio.Queue = asyncio.Queue()
+        ev = AsyncMock()
+        ev.connected = True
+        ev.ensure_connected = AsyncMock()
+        ev.disconnect = AsyncMock()
+        ev.write_max_charging_power = AsyncMock(return_value=True)
+        ev.read_max_charging_power = AsyncMock(return_value=4200.0)
+
+        client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue, ev_client=ev)
+        client._client = AsyncMock()
+
+        await client._handle_command("ev_charger/number/max_charging_power/set", "4200")
+
+        ev.ensure_connected.assert_awaited_once()
+        ev.write_max_charging_power.assert_awaited_once_with(4200.0)
+        ev.read_max_charging_power.assert_awaited_once()
+        ev.disconnect.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_runtime_max_charging_power_invalid_range_rejected(self):
+        state = AppState(charge_mode="Standby")
+        cfg = MagicMock()
+        queue: asyncio.Queue = asyncio.Queue()
+        ev = AsyncMock()
+        ev.connected = True
+        ev.ensure_connected = AsyncMock()
+        ev.disconnect = AsyncMock()
+
+        client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue, ev_client=ev)
+        client._client = AsyncMock()
+
+        await client._handle_command("ev_charger/number/max_charging_power/set", "4100")
 
         ev.ensure_connected.assert_not_awaited()
         ev.disconnect.assert_not_awaited()
