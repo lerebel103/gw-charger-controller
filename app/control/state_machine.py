@@ -162,17 +162,24 @@ def apply_charging_events(loop: ControlLoop, setpoint: float) -> float:
             loop._stopping_at = None
             loop._external_stop_ticks = 0
             logger.info(
-                "Charging event: stopping (reason=%s), mode %s->%s during active state forces immediate setpoint=0",
+                "Charging event: stopping (reason=%s), mode %s->%s during active state "
+                "forces setpoint=0 (active_power=%.0f W)",
                 reason,
                 loop._session_origin_mode,
                 state.charge_mode,
+                state.ev_active_power_w or 0,
             )
             return 0.0
 
         set_session_state(loop, ChargeSessionState.STOPPING)
         loop._stopping_at = _time.monotonic()
         loop._external_stop_ticks = 0
-        logger.info("Charging event: stopping (reason=%s), holding setpoint for %.0f s", reason, _STOPPING_MIN_DELAY_S)
+        logger.info(
+            "Charging event: stopping (reason=%s), holding setpoint for %.0f s (active_power=%.0f W)",
+            reason,
+            _STOPPING_MIN_DELAY_S,
+            state.ev_active_power_w or 0,
+        )
         return loop._last_positive_setpoint
 
     if current_session_state(loop) == ChargeSessionState.STOPPING:
