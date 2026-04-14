@@ -11,9 +11,10 @@ from app.control_loop import (
     _GRID_EXPORT_START_THRESHOLD_W,
     _MAX_CHARGE_W,
     _MIN_CHARGE_W,
+    _STOP_PRESET_W,
     ControlLoop,
 )
-from app.state import AppState
+from app.state import AppState, ChargerStatus
 
 
 def _make_loop(state: AppState, **overrides) -> ControlLoop:
@@ -1112,32 +1113,38 @@ class TestStandbyWriteSuppression:
         defaults = dict(
             ev_connected=True,
             charge_mode="Standby",
-            ev_charger_setpoint_raw=44,
+            ev_charger_status_enum=ChargerStatus.IDLE_CONNECTOR_PLUGGED,
+            ev_active_power_w=0.0,
         )
         defaults.update(overrides)
         return AppState(**defaults)
 
-    def test_not_suppressed_until_setpoint_zero_applied(self):
-        state = self._make_state(ev_charger_setpoint_raw=44)
+    def test_not_suppressed_while_charger_active(self):
+        state = self._make_state(ev_charger_status_enum=ChargerStatus.CHARGING_IN_PROGRESS)
         cl = _make_loop(state)
         assert cl._should_suppress_ev_writes(0.0) is False
 
     def test_suppressed_once_standby_reached(self):
-        state = self._make_state(ev_charger_setpoint_raw=0)
+        state = self._make_state()
         cl = _make_loop(state)
         assert cl._should_suppress_ev_writes(0.0) is True
+
+    def test_not_suppressed_while_power_still_positive(self):
+        state = self._make_state(ev_active_power_w=1200.0)
+        cl = _make_loop(state)
+        assert cl._should_suppress_ev_writes(0.0) is False
 
     def test_latch_keeps_suppressing_in_standby(self):
-        state = self._make_state(ev_charger_setpoint_raw=0)
+        state = self._make_state()
         cl = _make_loop(state)
         assert cl._should_suppress_ev_writes(0.0) is True
 
-        # Firmware may change its own setpoint later; controller stays quiet.
-        state.ev_charger_setpoint_raw = 60
+        # Charger state can change later; once latched, controller stays quiet.
+        state.ev_charger_status_enum = ChargerStatus.CHARGING_IN_PROGRESS
         assert cl._should_suppress_ev_writes(0.0) is True
 
     def test_leaving_standby_clears_latch(self):
-        state = self._make_state(ev_charger_setpoint_raw=0)
+        state = self._make_state()
         cl = _make_loop(state)
         assert cl._should_suppress_ev_writes(0.0) is True
 
@@ -1145,6 +1152,78 @@ class TestStandbyWriteSuppression:
         assert cl._should_suppress_ev_writes(4400.0) is False
 
     def test_positive_setpoint_in_standby_does_not_suppress(self):
-        state = self._make_state(ev_charger_setpoint_raw=0)
+        state = self._make_state()
         cl = _make_loop(state)
         assert cl._should_suppress_ev_writes(5000.0) is False
+
+
+class TestEvOutputActuation:
+    def _make_state(self, **overrides):
+        defaults = dict(
+            ev_connected=True,
+            charge_mode="Eco",
+            ev_charger_status_enum=ChargerStatus.IDLE_CONNECTOR_PLUGGED,
+            ev_active_power_w=0.0,
+        )
+        defaults.update(overrides)
+        return AppState(**defaults)
+
+    def test_suppressed_skips_all_ev_output(self):
+        import asyncio as _asyncio
+
+        state = self._make_state()
+        cl = _make_loop(state)
+
+        _asyncio.run(cl._apply_ev_output(0.0, suppress_ev_writes=True))
+
+        cl._ev_client.write_setpoint.assert_not_awaited()
+        cl._ev_client.start_charging.assert_not_awaited()
+        cl._ev_client.stop_charging.assert_not_awaited()
+
+    def test_stop_path_writes_preset_and_sends_stop_when_active(self):
+        import asyncio as _asyncio
+
+        state = self._make_state(ev_charger_status_enum=ChargerStatus.CHARGING_IN_PROGRESS)
+        cl = _make_loop(state)
+
+        _asyncio.run(cl._apply_ev_output(0.0, suppress_ev_writes=False))
+
+        cl._ev_client.write_setpoint.assert_awaited_once_with(_STOP_PRESET_W)
+        cl._ev_client.stop_charging.assert_awaited_once_with()
+        cl._ev_client.start_charging.assert_not_awaited()
+
+    def test_stop_path_writes_preset_without_stop_when_not_active(self):
+        import asyncio as _asyncio
+
+        state = self._make_state(ev_charger_status_enum=ChargerStatus.IDLE_CONNECTOR_PLUGGED)
+        cl = _make_loop(state)
+
+        _asyncio.run(cl._apply_ev_output(0.0, suppress_ev_writes=False))
+
+        cl._ev_client.write_setpoint.assert_awaited_once_with(_STOP_PRESET_W)
+        cl._ev_client.stop_charging.assert_not_awaited()
+        cl._ev_client.start_charging.assert_not_awaited()
+
+    def test_positive_setpoint_sends_start_when_status_requires_it(self):
+        import asyncio as _asyncio
+
+        state = self._make_state(ev_charger_status_enum=ChargerStatus.IDLE_CONNECTOR_PLUGGED)
+        cl = _make_loop(state)
+
+        _asyncio.run(cl._apply_ev_output(5600.0, suppress_ev_writes=False))
+
+        cl._ev_client.write_setpoint.assert_awaited_once_with(5600.0)
+        cl._ev_client.start_charging.assert_awaited_once_with()
+        cl._ev_client.stop_charging.assert_not_awaited()
+
+    def test_positive_setpoint_does_not_send_start_when_already_active(self):
+        import asyncio as _asyncio
+
+        state = self._make_state(ev_charger_status_enum=ChargerStatus.CHARGING_IN_PROGRESS)
+        cl = _make_loop(state)
+
+        _asyncio.run(cl._apply_ev_output(5600.0, suppress_ev_writes=False))
+
+        cl._ev_client.write_setpoint.assert_awaited_once_with(5600.0)
+        cl._ev_client.start_charging.assert_not_awaited()
+        cl._ev_client.stop_charging.assert_not_awaited()

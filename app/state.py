@@ -65,6 +65,124 @@ class ChargerStatus(IntEnum):
         return [status.display_name for status in cls]
 
 
+class AdvancedChargingMode(IntEnum):
+    """GW22K-HCA-20 advanced charging mode (register 10032)."""
+
+    FAST_CHARGING = 0
+    PV_CHARGING = 1
+    PV_BATTERY_HYBRID_CHARGING = 2
+    UNKNOWN = 255
+
+    @classmethod
+    def from_register(cls, value: int | None) -> AdvancedChargingMode | None:
+        """Convert register value to AdvancedChargingMode enum."""
+        if value is None:
+            return None
+        try:
+            return cls(value)
+        except ValueError:
+            return cls.UNKNOWN
+
+    @property
+    def display_name(self) -> str:
+        names = {
+            0: "Fast charging",
+            1: "PV charging",
+            2: "PV + battery hybrid charging",
+            255: "Unknown",
+        }
+        return names.get(self.value, f"Unknown ({self.value})")
+
+    @classmethod
+    def ha_options(cls) -> list[str]:
+        """Return Home Assistant enum options in stable declaration order."""
+        return [mode.display_name for mode in cls]
+
+    @classmethod
+    def from_display_name(cls, value: str) -> AdvancedChargingMode | None:
+        """Map Home Assistant display label to enum value."""
+        for mode in cls:
+            if mode.display_name == value:
+                return mode
+        return None
+
+
+class PlugAndChargeAutoStart(IntEnum):
+    """GW22K-HCA-20 plug-and-charge auto start (register 10019)."""
+
+    OFF = 0
+    ON = 1
+    UNKNOWN = 255
+
+    @classmethod
+    def from_register(cls, value: int | None) -> PlugAndChargeAutoStart | None:
+        """Convert register value to PlugAndChargeAutoStart enum."""
+        if value is None:
+            return None
+        try:
+            return cls(value)
+        except ValueError:
+            return cls.UNKNOWN
+
+    @property
+    def display_name(self) -> str:
+        names = {
+            0: "Off",
+            1: "On",
+            255: "Unknown",
+        }
+        return names.get(self.value, f"Unknown ({self.value})")
+
+    @classmethod
+    def ha_options(cls) -> list[str]:
+        """Return Home Assistant enum options in stable declaration order."""
+        return [value.display_name for value in cls]
+
+    @classmethod
+    def from_display_name(cls, value: str) -> PlugAndChargeAutoStart | None:
+        """Map Home Assistant display label to enum value."""
+        for item in cls:
+            if item.display_name == value:
+                return item
+        return None
+
+
+class SinglePhaseSwitching(IntEnum):
+    """GW22K-HCA-20 single phase switching (register 10023)."""
+
+    DISABLED = 0
+    ENABLED = 1
+    UNKNOWN = 255
+
+    @classmethod
+    def from_register(cls, value: int | None) -> SinglePhaseSwitching | None:
+        """Convert register value to SinglePhaseSwitching enum."""
+        if value is None:
+            return None
+        try:
+            return cls(value)
+        except ValueError:
+            return cls.UNKNOWN
+
+    @property
+    def display_name(self) -> str:
+        names = {
+            0: "Disabled",
+            1: "Enabled",
+            255: "Unknown",
+        }
+        return names.get(self.value, f"Unknown ({self.value})")
+
+    @classmethod
+    def from_switch_payload(cls, value: str) -> SinglePhaseSwitching | None:
+        """Map Home Assistant switch payload to enum value."""
+        if value == "ON":
+            return cls.ENABLED
+        if value == "OFF":
+            return cls.DISABLED
+        return None
+
+
 @dataclass
 class AppState:
     """Central in-memory state. Single-threaded asyncio — no locking needed."""
@@ -81,6 +199,18 @@ class AppState:
     ev_connected: bool = False
     ev_charger_status: int | None = None
     ev_charger_status_enum: ChargerStatus | None = None  # decoded status for internal use
+    ev_comm_connection_status_raw: int | None = None
+    ev_comm_wifi_router_connected: bool | None = None
+    ev_comm_iot_cloud_connected: bool | None = None
+    ev_comm_inverter_online: bool | None = None
+    ev_comm_mid_meter_online: bool | None = None
+    ev_comm_gw_meter_online: bool | None = None
+    ev_comm_ems_online: bool | None = None
+    ev_serial_number: str | None = None
+    ev_advanced_charging_mode: int | None = None
+    ev_advanced_charging_mode_enum: AdvancedChargingMode | None = None
+    ev_single_phase_switching: int | None = None
+    ev_single_phase_switching_enum: SinglePhaseSwitching | None = None
     ev_active_power_w: float | None = None
     ev_session_energy_wh: float | None = None
     ev_voltage_l1_v: float | None = None
@@ -91,7 +221,9 @@ class AppState:
     ev_current_c: float | None = None
     ev_completion_time_h: int | None = None
     ev_total_energy_wh: float | None = None
-    ev_plug_and_charge: bool = False  # register 10019: True when value == 1
+    ev_plug_and_charge: bool = False  # compatibility mirror of register 10019 (True when value == 1)
+    ev_plug_and_charge_auto_start: int | None = None
+    ev_plug_and_charge_auto_start_enum: PlugAndChargeAutoStart | None = None
     ev_charger_setpoint_raw: int | None = None  # register 10029: current setpoint as read from charger
     ev_soc_pct: float | None = None
     ev_soc_pct_updated_at: float | None = None  # time.monotonic() of last SOC update
@@ -172,6 +304,17 @@ class StateSnapshot:
     ev_connected: bool = False
     ev_charger_status: int | None = None
     ev_charger_status_display: str | None = None  # human-readable status name
+    ev_comm_connection_status_raw: int | None = None
+    ev_comm_wifi_router_connected: bool | None = None
+    ev_comm_iot_cloud_connected: bool | None = None
+    ev_comm_inverter_online: bool | None = None
+    ev_comm_mid_meter_online: bool | None = None
+    ev_comm_gw_meter_online: bool | None = None
+    ev_comm_ems_online: bool | None = None
+    ev_serial_number: str | None = None
+    ev_advanced_charging_mode_display: str | None = None
+    ev_plug_and_charge_auto_start_display: str | None = None
+    ev_single_phase_switching_display: str | None = None
     ev_active_power_w: float | None = None
     ev_session_energy_wh: float | None = None
     ev_voltage_l1_v: float | None = None

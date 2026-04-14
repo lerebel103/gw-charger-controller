@@ -5,10 +5,23 @@
 When the controller is in **standby mode** (`charge_mode == "Standby"`):
 
 - **No modbus reads** should be performed (except configuration reads)
-- **No modbus writes** should be performed (except to set setpoint to zero)
+- **No modbus writes** should be performed (except the one-time standby transition sequence to stop charging)
 - **No connection attempts** should be made to the EV charger
 
 Once the mode selection to standby is achieved and the setpoint reaches 0, the charger should be left completely untouched until the mode is changed away from standby.
+
+### Standby Exception - User-Initiated Runtime Commands
+
+An explicit exception is allowed for user-initiated Home Assistant commands that update charger runtime memory while in standby:
+
+- Register **10032** (Advanced Charging Mode)
+- Register **10019** (Plug and Charge auto start)
+- Register **10023** (Single phase switching)
+
+Constraints for this exception:
+- Must be **on-demand only** (no periodic polling/writing)
+- Must use a short-lived session: connect, write, read-back/confirm, disconnect
+- Must not re-enable normal control-loop EV Modbus activity in standby
 
 ### Rationale
 

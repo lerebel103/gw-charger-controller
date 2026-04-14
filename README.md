@@ -10,6 +10,8 @@ A Docker-based integration that bridges a GW22K-HCA-20 EV charger and a Victron 
 - **All 3-phase** voltage, current, and voltage drop sensors
 - **Total lifetime energy** tracking (register 10065, U32)
 - **Runtime configuration** — all settings adjustable from HA without restarting
+- **Runtime charger memory controls** from HA for advanced charging mode, plug-and-charge auto start, and single-phase switching
+- **Diagnostics** for charger communication link bitfield and per-link online states
 
 ## Charge Modes
 
@@ -39,7 +41,46 @@ Charges at a fixed power level configured via Home Assistant (4200–22000 W). I
 
 ### Standby Mode
 
-Sets the charge power to zero. No EV charging takes place. Use this to temporarily disable all charging without changing other settings.
+Stops EV charging and then suppresses regular EV Modbus connections/reads/writes. Use this to temporarily disable automated charging without changing other settings.
+
+Standby includes a narrow user-initiated exception path for runtime charger memory controls only:
+- Advanced Charging Mode (register 10032)
+- Plug and Charge Auto Start (register 10019)
+- Single Phase Switching (register 10023)
+
+These standby exceptions are on-demand only and use a short-lived session (connect -> write -> readback -> disconnect).
+
+## Runtime EV Controls
+
+The following controls are exposed in Home Assistant and are not persisted to config.yaml (they are charger runtime memory values):
+
+- **Advanced Charging Mode** (`select`)
+   - Fast charging
+   - PV charging
+   - PV + battery hybrid charging
+- **Plug and Charge Auto Start** (`select`)
+   - Off
+   - On
+- **Single Phase Switching** (`switch`)
+   - Off
+   - On
+
+Outside standby these values are polled and reflected continuously. In standby they can still be changed via the exception path above.
+
+## Diagnostics
+
+Additional diagnostics are exposed to Home Assistant:
+
+- **Communication Connection Status** (raw U16, register 10018)
+- Per-bit connectivity binary sensors from register 10018:
+   - Wi-Fi router connected
+   - IoT cloud connected
+   - Inverter online
+   - MID meter online
+   - GW meter online
+   - EMS online
+
+The charger serial number (register 10040, ASCII) is read once at startup/connection and used as Home Assistant device metadata (`device.serial_number`) in MQTT discovery payloads.
 
 ## Getting Started
 
@@ -181,7 +222,7 @@ This triggers all three workflows: CI runs lint + tests, the Docker image is bui
 
 ## Hardware
 
-- **EV Charger**: GoodWe GW22K-HCA-20 (Modbus TCP, slave ID 247, setpoint range 4400–22000 W or 0 for pause). Note: the documented minimum is 4200 W (raw 42) but in practice the charger rejects values below 4400 W (raw 44).
+- **EV Charger**: GoodWe GW22K-HCA-20 (Modbus TCP, slave ID 247, practical setpoint range 4400–22000 W for active charging). Note: the documented minimum is 4200 W (raw 42), which is used as a pre-stop register value before issuing an explicit stop command.
 - **Inverter/Battery**: Victron GX (Modbus TCP, unit ID 100 for system, configurable for grid meter)
 
 ## License

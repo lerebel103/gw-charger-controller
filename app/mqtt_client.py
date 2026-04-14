@@ -13,7 +13,14 @@ import aiomqtt
 from app.backoff import exponential_backoff
 from app.config import ConfigManager
 from app.control_loop import normalise_hhmm, validate_hhmm
-from app.state import AppState, ChargerStatus, StateSnapshot
+from app.state import (
+    AdvancedChargingMode,
+    AppState,
+    ChargerStatus,
+    PlugAndChargeAutoStart,
+    SinglePhaseSwitching,
+    StateSnapshot,
+)
 from app.version import __version__
 
 logger = logging.getLogger(__name__)
@@ -21,13 +28,22 @@ logger = logging.getLogger(__name__)
 _PREFIX = "ev_charger"
 _VEHICLE_SOC_TOPIC = f"{_PREFIX}/vehicle/soc/set"
 
-_DEVICE = {
+_DEVICE_BASE = {
     "identifiers": ["ev_charger_integration"],
     "name": "EV Charger",
     "model": "GW22K-HCA-20",
     "manufacturer": "lerebel103",
     "sw_version": __version__,
 }
+
+
+def _device_payload(state: AppState) -> dict[str, Any]:
+    """Build Home Assistant device payload, including serial when known."""
+    payload = dict(_DEVICE_BASE)
+    if state.ev_serial_number:
+        payload["serial_number"] = state.ev_serial_number
+    return payload
+
 
 # ---------------------------------------------------------------------------
 # Entity definitions — single source of truth for discovery, state, commands
@@ -74,6 +90,7 @@ def _binary_sensor(
     name: str,
     slug: str,
     device_class: str | None = None,
+    entity_category: str | None = None,
 ) -> dict[str, Any]:
     d: dict[str, Any] = {
         "component": "binary_sensor",
@@ -83,7 +100,27 @@ def _binary_sensor(
     }
     if device_class:
         d["device_class"] = device_class
+    if entity_category:
+        d["entity_category"] = entity_category
     return d
+
+
+def _switch(
+    unique_id: str,
+    name: str,
+    slug: str,
+    payload_on: str = "ON",
+    payload_off: str = "OFF",
+) -> dict[str, Any]:
+    return {
+        "component": "switch",
+        "unique_id": unique_id,
+        "name": name,
+        "state_topic": f"{_PREFIX}/switch/{slug}/state",
+        "command_topic": f"{_PREFIX}/switch/{slug}/set",
+        "payload_on": payload_on,
+        "payload_off": payload_off,
+    }
 
 
 def _select(
@@ -161,11 +198,68 @@ ENTITIES: list[dict[str, Any]] = [
     _sensor("ev_charger_completion_time", "Completion Time", "completion_time", "h", None, "measurement"),
     _sensor("ev_charger_soc", "EV SOC", "ev_soc", "%", "battery", "measurement"),
     _sensor("ev_charger_status", "Charger Status", "status", None, "enum", None, None, ChargerStatus.ha_options()),
+    _sensor("ev_charger_comm_connection_status", "Communication Connection Status", "comm_connection_status", None),
     _sensor("ev_charger_uptime", "Controller Uptime", "uptime", "s", None, "total_increasing", "diagnostic"),
     # Binary sensors
     _binary_sensor("ev_charger_connected", "EV Connected", "connected", "connectivity"),
+    _binary_sensor(
+        "ev_charger_comm_wifi_router",
+        "Wi-Fi Router Connected",
+        "comm_wifi_router",
+        None,
+        "diagnostic",
+    ),
+    _binary_sensor(
+        "ev_charger_comm_iot_cloud",
+        "IoT Cloud Connected",
+        "comm_iot_cloud",
+        None,
+        "diagnostic",
+    ),
+    _binary_sensor(
+        "ev_charger_comm_inverter",
+        "Inverter Online",
+        "comm_inverter",
+        None,
+        "diagnostic",
+    ),
+    _binary_sensor(
+        "ev_charger_comm_mid_meter",
+        "MID Meter Online",
+        "comm_mid_meter",
+        None,
+        "diagnostic",
+    ),
+    _binary_sensor(
+        "ev_charger_comm_gw_meter",
+        "GW Meter Online",
+        "comm_gw_meter",
+        None,
+        "diagnostic",
+    ),
+    _binary_sensor(
+        "ev_charger_comm_ems",
+        "EMS Online",
+        "comm_ems",
+        None,
+        "diagnostic",
+    ),
     # Select
-    _select("ev_charger_mode", "Charge Mode", "mode", ["Eco", "Manual", "Standby"]),
+    _select("ev_charger_mode", "Charge Mode", "mode", ["Standby", "Eco", "Manual"]),
+    _select(
+        "ev_charger_advanced_charging_mode",
+        "Advanced Charging Mode",
+        "advanced_charging_mode",
+        AdvancedChargingMode.ha_options(),
+    ),
+    _select(
+        "ev_charger_plug_and_charge_auto_start",
+        "Plug and Charge Auto Start",
+        "plug_and_charge_auto_start",
+        PlugAndChargeAutoStart.ha_options(),
+    ),
+    # Switch
+    _switch("ev_charger_single_phase_switching", "Single Phase Switching", "single_phase_switching"),
     # Numbers
     _number("ev_charger_manual_power", "Manual Charge Power", "manual_power", 4400, 11000, 100, "W"),
     _number("ev_charger_ev_min_soc", "Min EV SOC", "ev_min_soc", 0, 100, 1, "%"),
@@ -262,6 +356,9 @@ ENTITIES: list[dict[str, Any]] = [
 # value_type: "float", "int", "str", "select", "hhmm"
 _COMMAND_MAP: dict[str, tuple[str, str]] = {
     f"{_PREFIX}/select/mode/set": ("charge_mode", "select"),
+    f"{_PREFIX}/select/advanced_charging_mode/set": ("ev_advanced_charging_mode", "select"),
+    f"{_PREFIX}/select/plug_and_charge_auto_start/set": ("ev_plug_and_charge_auto_start", "select"),
+    f"{_PREFIX}/switch/single_phase_switching/set": ("ev_single_phase_switching", "switch"),
     f"{_PREFIX}/number/manual_power/set": ("manual_power_w", "float"),
     f"{_PREFIX}/number/ev_min_soc/set": ("ev_min_soc_pct", "float"),
     f"{_PREFIX}/number/ev_max_soc/set": ("ev_max_soc_pct", "float"),
@@ -304,7 +401,15 @@ _NUMBER_RANGES: dict[str, tuple[float, float]] = {
 
 # Select entity valid options
 _SELECT_OPTIONS: dict[str, list[str]] = {
-    "charge_mode": ["Eco", "Manual", "Standby"],
+    "charge_mode": ["Standby", "Eco", "Manual"],
+    "ev_advanced_charging_mode": AdvancedChargingMode.ha_options(),
+    "ev_plug_and_charge_auto_start": PlugAndChargeAutoStart.ha_options(),
+}
+
+_RUNTIME_EV_COMMAND_FIELDS = {
+    "ev_advanced_charging_mode",
+    "ev_plug_and_charge_auto_start",
+    "ev_single_phase_switching",
 }
 
 # Build reverse map: command_topic → state_topic (from ENTITIES)
@@ -332,6 +437,7 @@ class MQTTClient:
         self._victron_client = victron_client
         self._ev_client = ev_client
         self._client: aiomqtt.Client | None = None
+        self._published_device_serial: str | None = None
 
     # ------------------------------------------------------------------
     # Task 8.1 — Discovery
@@ -350,7 +456,7 @@ class MQTTClient:
                 "unique_id": unique_id,
                 "object_id": unique_id,
                 "state_topic": entity["state_topic"],
-                "device": _DEVICE,
+                "device": _device_payload(self._state),
             }
 
             # Optional fields
@@ -364,11 +470,17 @@ class MQTTClient:
                 payload["command_topic"] = entity["command_topic"]
             if "options" in entity:
                 payload["options"] = entity["options"]
+            if "payload_on" in entity:
+                payload["payload_on"] = entity["payload_on"]
+            if "payload_off" in entity:
+                payload["payload_off"] = entity["payload_off"]
             for key in ("min", "max", "step", "mode", "force_update", "entity_category"):
                 if key in entity:
                     payload[key] = entity[key]
 
             await self._client.publish(topic, json.dumps(payload), retain=True)
+
+        self._published_device_serial = self._state.ev_serial_number
 
     # ------------------------------------------------------------------
     # Task 8.3 — State publishing
@@ -387,6 +499,11 @@ class MQTTClient:
             if value is None:
                 return "unavailable"
             return str(round(value, 2))
+
+        def _fmt_binary(value: bool | None) -> str:
+            if value is None:
+                return "unavailable"
+            return "ON" if value else "OFF"
 
         # Sensors
         await self._client.publish(f"{_PREFIX}/sensor/power/state", _fmt(snapshot.ev_active_power_w))
@@ -414,11 +531,61 @@ class MQTTClient:
         await self._client.publish(f"{_PREFIX}/sensor/completion_time/state", _fmt(snapshot.ev_completion_time_h))
         await self._client.publish(f"{_PREFIX}/sensor/ev_soc/state", _fmt(snapshot.ev_soc_pct))
         await self._client.publish(f"{_PREFIX}/sensor/status/state", _fmt(snapshot.ev_charger_status_display))
+        await self._client.publish(
+            f"{_PREFIX}/sensor/comm_connection_status/state",
+            _fmt(snapshot.ev_comm_connection_status_raw),
+        )
+        await self._client.publish(
+            f"{_PREFIX}/select/advanced_charging_mode/state",
+            _fmt(snapshot.ev_advanced_charging_mode_display),
+            retain=True,
+        )
+        await self._client.publish(
+            f"{_PREFIX}/select/plug_and_charge_auto_start/state",
+            _fmt(snapshot.ev_plug_and_charge_auto_start_display),
+            retain=True,
+        )
 
         # Binary sensor
         await self._client.publish(
             f"{_PREFIX}/binary_sensor/connected/state",
             "ON" if snapshot.ev_connected else "OFF",
+        )
+        await self._client.publish(
+            f"{_PREFIX}/binary_sensor/comm_wifi_router/state",
+            _fmt_binary(snapshot.ev_comm_wifi_router_connected),
+        )
+        await self._client.publish(
+            f"{_PREFIX}/binary_sensor/comm_iot_cloud/state",
+            _fmt_binary(snapshot.ev_comm_iot_cloud_connected),
+        )
+        await self._client.publish(
+            f"{_PREFIX}/binary_sensor/comm_inverter/state",
+            _fmt_binary(snapshot.ev_comm_inverter_online),
+        )
+        await self._client.publish(
+            f"{_PREFIX}/binary_sensor/comm_mid_meter/state",
+            _fmt_binary(snapshot.ev_comm_mid_meter_online),
+        )
+        await self._client.publish(
+            f"{_PREFIX}/binary_sensor/comm_gw_meter/state",
+            _fmt_binary(snapshot.ev_comm_gw_meter_online),
+        )
+        await self._client.publish(
+            f"{_PREFIX}/binary_sensor/comm_ems/state",
+            _fmt_binary(snapshot.ev_comm_ems_online),
+        )
+
+        # Switch
+        switch_state = "unavailable"
+        if snapshot.ev_single_phase_switching_display == "Enabled":
+            switch_state = "ON"
+        elif snapshot.ev_single_phase_switching_display == "Disabled":
+            switch_state = "OFF"
+        await self._client.publish(
+            f"{_PREFIX}/switch/single_phase_switching/state",
+            switch_state,
+            retain=True,
         )
 
         # Diagnostics
@@ -449,6 +616,24 @@ class MQTTClient:
             (f"{_PREFIX}/text/solar_battery_discharge_end/state", s.solar_battery_discharge_end),
             (f"{_PREFIX}/text/ev_charger_ip/state", s.ev_charger_ip),
             (f"{_PREFIX}/text/victron_ip/state", s.victron_ip),
+            (
+                f"{_PREFIX}/select/advanced_charging_mode/state",
+                s.ev_advanced_charging_mode_enum.display_name if s.ev_advanced_charging_mode_enum else "unavailable",
+            ),
+            (
+                f"{_PREFIX}/select/plug_and_charge_auto_start/state",
+                s.ev_plug_and_charge_auto_start_enum.display_name
+                if s.ev_plug_and_charge_auto_start_enum
+                else "unavailable",
+            ),
+            (
+                f"{_PREFIX}/switch/single_phase_switching/state",
+                "ON"
+                if s.ev_single_phase_switching_enum == SinglePhaseSwitching.ENABLED
+                else "OFF"
+                if s.ev_single_phase_switching_enum == SinglePhaseSwitching.DISABLED
+                else "unavailable",
+            ),
         ]
         for topic, value in pairs:
             await self._client.publish(topic, value, retain=True)
@@ -482,6 +667,10 @@ class MQTTClient:
             return
 
         attr, vtype = mapping
+
+        if attr in _RUNTIME_EV_COMMAND_FIELDS:
+            await self._handle_runtime_ev_select(attr, payload, topic_str)
+            return
 
         if vtype == "select":
             valid_options = _SELECT_OPTIONS.get(attr, [])
@@ -544,6 +733,61 @@ class MQTTClient:
         if attr in _VICTRON_RECONNECT_FIELDS and self._victron_client is not None:
             logger.info("Victron GX connection config changed (%s), triggering reconnect", attr)
             asyncio.ensure_future(self._victron_client.reconnect())
+
+    async def _handle_runtime_ev_select(self, attr: str, payload: str, topic: str) -> None:
+        """Handle user-driven runtime EV select commands, including standby exception path."""
+        if self._ev_client is None:
+            logger.warning("Runtime EV command ignored (%s): EV client unavailable", attr)
+            return
+
+        if attr == "ev_advanced_charging_mode":
+            enum_value = AdvancedChargingMode.from_display_name(payload)
+            if enum_value is None:
+                logger.warning("Invalid select value '%s' for %s", payload, attr)
+                return
+            writer = self._ev_client.write_advanced_charging_mode
+            reader = self._ev_client.read_advanced_charging_mode
+        elif attr == "ev_plug_and_charge_auto_start":
+            enum_value = PlugAndChargeAutoStart.from_display_name(payload)
+            if enum_value is None:
+                logger.warning("Invalid select value '%s' for %s", payload, attr)
+                return
+            writer = self._ev_client.write_plug_and_charge_auto_start
+            reader = self._ev_client.read_plug_and_charge_auto_start
+        elif attr == "ev_single_phase_switching":
+            enum_value = SinglePhaseSwitching.from_switch_payload(payload)
+            if enum_value is None:
+                logger.warning("Invalid switch value '%s' for %s", payload, attr)
+                return
+            writer = self._ev_client.write_single_phase_switching
+            reader = self._ev_client.read_single_phase_switching
+        else:
+            logger.warning("Unsupported runtime EV select field: %s", attr)
+            return
+
+        standby_override = self._state.charge_mode == "Standby"
+
+        await self._ev_client.ensure_connected()
+        if not self._ev_client.connected:
+            logger.warning("Runtime EV command ignored (%s): unable to connect to charger", attr)
+            return
+
+        try:
+            ok = await writer(enum_value)
+            if not ok:
+                return
+            confirmed = await reader()
+            if attr == "ev_single_phase_switching":
+                state_value = "ON" if confirmed == SinglePhaseSwitching.ENABLED else "OFF"
+            else:
+                state_value = confirmed.display_name if confirmed else "unavailable"
+
+            state_topic = _CMD_TO_STATE_TOPIC.get(topic)
+            if state_topic and self._client is not None:
+                await self._client.publish(state_topic, state_value, retain=True)
+        finally:
+            if standby_override:
+                await self._ev_client.disconnect()
 
     # ------------------------------------------------------------------
     # Task 8.7 — Run loop
@@ -608,6 +852,8 @@ class MQTTClient:
                 elif isinstance(item, dict) and item.get("type") == "charging_event":
                     await self._publish_charging_event(item)
                 elif isinstance(item, StateSnapshot):
+                    if item.ev_serial_number and item.ev_serial_number != self._published_device_serial:
+                        await self._publish_discovery()
                     await self._publish_state(item)
             except aiomqtt.MqttError:
                 logger.warning("Failed to publish from queue")

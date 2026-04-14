@@ -10,7 +10,7 @@ from datetime import datetime, time
 
 from app.config import ConfigManager
 from app.modbus_ev import EVChargerModbusClient
-from app.state import AppState, StateSnapshot
+from app.state import AppState, ChargerStatus, StateSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +19,7 @@ _HHMM_RE = re.compile(r"^(\d{1,2}):([0-5]\d)$")
 # Charger hardware limits
 _MIN_CHARGE_W = 4400.0
 _MAX_CHARGE_W = 22000.0
+_STOP_PRESET_W = 4200.0  # written before stop command to avoid writing setpoint=0 to charger
 
 # Eco outside-window thresholds (applied to rolling means)
 _GRID_EXPORT_START_THRESHOLD_W = -1400.0  # mean grid_power_w <= this → start charging
@@ -625,8 +626,8 @@ class ControlLoop:
         Behaviour:
         - Outside standby: never suppress and clear standby latch.
         - In standby while still commanding charging (> 0): never suppress and clear latch.
-        - In standby at setpoint 0: allow writes until charger setpoint reaches 0,
-          then latch suppression and keep all interactions disabled until leaving standby.
+                - In standby at setpoint 0: keep writes enabled while charger is active or
+                    starting, then latch suppression once charger is no longer active.
         """
         if self._state.charge_mode != "Standby":
             self._standby_write_quiet = False
@@ -639,12 +640,71 @@ class ControlLoop:
         if self._standby_write_quiet:
             return True
 
-        if self._state.ev_charger_setpoint_raw == 0:
+        if self._charger_is_active_or_starting():
+            return False
+
+        ev_power = self._state.ev_active_power_w
+        if ev_power is not None and ev_power > 0:
+            return False
+
+        if self._state.ev_connected:
             self._standby_write_quiet = True
             logger.info("Standby reached — suppressing all EV Modbus interactions (reads, writes, connections)")
             return True
 
         return False
+
+    def _charger_is_active_or_starting(self) -> bool:
+        """Return True when charger status indicates charging or start-up activity."""
+        status = self._state.ev_charger_status_enum
+        return status in {
+            ChargerStatus.HANDSHAKING_WITH_VEHICLE,
+            ChargerStatus.CHARGING_IN_PROGRESS,
+            ChargerStatus.SCHEDULED_START,
+        }
+
+    def _should_send_start_command(self, setpoint: float) -> bool:
+        """Return True when a one-shot start command should be sent."""
+        if setpoint <= 0 or not self._state.ev_connected:
+            return False
+
+        status = self._state.ev_charger_status_enum
+        if status is None or self._charger_is_active_or_starting():
+            return False
+
+        return status in {
+            ChargerStatus.IDLE_CONNECTOR_PLUGGED,
+            ChargerStatus.CHARGING_COMPLETED,
+            ChargerStatus.START_FAILED,
+            ChargerStatus.CHARGING_INTERRUPTED_INSUFFICIENT_PV_BATTERY,
+        }
+
+    def _should_send_stop_command(self, setpoint: float) -> bool:
+        """Return True when a one-shot stop command should be sent."""
+        if setpoint > 0 or not self._state.ev_connected:
+            return False
+        return self._charger_is_active_or_starting()
+
+    async def _apply_ev_output(self, setpoint: float, suppress_ev_writes: bool) -> None:
+        """Apply EV output actions for this tick while preserving logical setpoint semantics.
+
+        Logical setpoint 0 remains the controller stop signal. At the Modbus layer,
+        we avoid writing setpoint=0 and instead write 4.2 kW before issuing a stop
+        command.
+        """
+        if suppress_ev_writes:
+            return
+
+        if setpoint > 0:
+            await self._ev_client.write_setpoint(setpoint)
+            if self._should_send_start_command(setpoint):
+                await self._ev_client.start_charging()
+            return
+
+        # Stop path: keep setpoint in-range before sending explicit stop command.
+        await self._ev_client.write_setpoint(_STOP_PRESET_W)
+        if self._should_send_stop_command(setpoint):
+            await self._ev_client.stop_charging()
 
     # ------------------------------------------------------------------
     # Task 6.9 — Run loop
@@ -694,14 +754,9 @@ class ControlLoop:
             # 6. In standby, stop writing once standby setpoint has been applied.
             suppress_ev_writes = self._should_suppress_ev_writes(setpoint)
 
-            # 7. Ensure charger enabled and write setpoint
-            # Keep charger enable writes for active charging, but avoid standby spam.
-            if self._state.ev_connected and (self._state.charge_mode != "Standby" or setpoint > 0):
-                # await self._ev_client.ensure_plug_and_charge()
-                await self._ev_client.ensure_enabled()
-
-            if not suppress_ev_writes:
-                await self._ev_client.write_setpoint(setpoint)
+            # 7. Apply EV output at tick-level.
+            # Logical setpoint behaviour is unchanged; command translation happens here.
+            await self._apply_ev_output(setpoint, suppress_ev_writes)
             self._state.commanded_setpoint_w = setpoint
 
             # 8. Publish state snapshot
@@ -710,6 +765,23 @@ class ControlLoop:
                 ev_charger_status=self._state.ev_charger_status,
                 ev_charger_status_display=self._state.ev_charger_status_enum.display_name
                 if self._state.ev_charger_status_enum
+                else None,
+                ev_comm_connection_status_raw=self._state.ev_comm_connection_status_raw,
+                ev_comm_wifi_router_connected=self._state.ev_comm_wifi_router_connected,
+                ev_comm_iot_cloud_connected=self._state.ev_comm_iot_cloud_connected,
+                ev_comm_inverter_online=self._state.ev_comm_inverter_online,
+                ev_comm_mid_meter_online=self._state.ev_comm_mid_meter_online,
+                ev_comm_gw_meter_online=self._state.ev_comm_gw_meter_online,
+                ev_comm_ems_online=self._state.ev_comm_ems_online,
+                ev_serial_number=self._state.ev_serial_number,
+                ev_advanced_charging_mode_display=self._state.ev_advanced_charging_mode_enum.display_name
+                if self._state.ev_advanced_charging_mode_enum
+                else None,
+                ev_plug_and_charge_auto_start_display=self._state.ev_plug_and_charge_auto_start_enum.display_name
+                if self._state.ev_plug_and_charge_auto_start_enum
+                else None,
+                ev_single_phase_switching_display=self._state.ev_single_phase_switching_enum.display_name
+                if self._state.ev_single_phase_switching_enum
                 else None,
                 ev_active_power_w=self._state.ev_active_power_w,
                 ev_session_energy_wh=self._state.ev_session_energy_wh,

@@ -8,7 +8,7 @@ from pymodbus.client import AsyncModbusTcpClient
 from pymodbus.exceptions import ModbusException
 
 from app.backoff import exponential_backoff
-from app.state import AppState, ChargerStatus
+from app.state import AdvancedChargingMode, AppState, ChargerStatus, PlugAndChargeAutoStart, SinglePhaseSwitching
 
 logger = logging.getLogger(__name__)
 
@@ -16,27 +16,31 @@ logger = logging.getLogger(__name__)
 _SLAVE_ID = 247
 
 # --- Read registers ---
-# Contiguous block: 10009..10017 (9 registers)
+# Contiguous block: 10009..10018 (10 registers)
 _REG_PHASE_A_VOLTAGE = 10009
-_CONTIGUOUS_COUNT = 9  # 10009–10017
+_CONTIGUOUS_COUNT = 10  # 10009–10018
 
 # Separate reads
 _REG_COMPLETION_TIME = 10031
+_REG_ADVANCED_CHARGING_MODE = 10032
+_REG_SERIAL_NUMBER = 10040
 _REG_TOTAL_ENERGY = 10065
 _REG_CAR_CONNECTION = 10075
 
 # --- Write registers ---
 _REG_PLUG_AND_CHARGE = 10019
+_REG_SINGLE_PHASE_SWITCHING = 10023
 _REG_MAX_CHARGING_POWER = 10029
 _REG_CHARGER_ENABLE = 10060
-_RAW_SETPOINT_MIN = 44  # minimum raw value (= 4.4 kW); 0 is also valid (pause)
+_RAW_SETPOINT_MIN = 44  # practical minimum to reliably start charging (= 4.4 kW)
 
 
 class EVChargerModbusClient:
     """Modbus TCP client for the GW22K-HCA-20 EV charger.
 
-    Provides ``ensure_connected()``, ``read()``, ``write_setpoint()``, and
-    ``ensure_enabled()`` methods called by the control loop each iteration.
+    Provides ``ensure_connected()``, ``read()``, ``write_setpoint()``,
+    ``start_charging()``, and ``stop_charging()`` methods called by the
+    control loop each iteration.
     Does not run its own async task.
     """
 
@@ -47,6 +51,7 @@ class EVChargerModbusClient:
         self._connected_port: int = 0
         self._reconnect_attempt: int = 0
         self._reconnect_after: float = 0.0
+        self._serial_read_attempted: bool = False
 
     @property
     def connected(self) -> bool:
@@ -83,7 +88,9 @@ class EVChargerModbusClient:
                 self._connected_ip = ip
                 self._connected_port = port
                 self._reconnect_attempt = 0
+                self._serial_read_attempted = False
                 logger.info("Connected to EV charger at %s:%d", ip, port)
+                await self._read_serial_number_once()
             else:
                 self._schedule_retry()
         except (OSError, ModbusException) as exc:
@@ -121,7 +128,13 @@ class EVChargerModbusClient:
         value (read each poll) and only writes if they differ.
 
         Args:
-            power_w: Desired charge power in watts (0 = pause, >= 4200 = charge).
+            power_w: Desired charge power in watts.
+
+                Operational notes:
+                - 4.4 kW is the practical minimum that reliably starts charging.
+                - 4.2 kW may be used by the control loop immediately before an
+                  explicit stop command to keep register values in-range while
+                  intentionally stopping charging.
         """
         if not self._state.ev_connected and power_w > 0:
             return
@@ -157,22 +170,157 @@ class EVChargerModbusClient:
             if resp.isError():
                 raise ModbusException(f"Plug and charge write error: {resp}")
             self._state.ev_plug_and_charge = True
+            self._state.ev_plug_and_charge_auto_start = 1
+            self._state.ev_plug_and_charge_auto_start_enum = PlugAndChargeAutoStart.ON
             logger.info("Plug and charge was disabled — enabled (register 10019=1)")
         except (ModbusException, OSError) as exc:
             logger.warning("Failed to enable plug and charge: %s", exc)
 
-    async def ensure_enabled(self) -> None:
-        """Write register 10060=2 every cycle to keep the charger enabled.
+    async def write_advanced_charging_mode(self, mode: AdvancedChargingMode) -> bool:
+        """Write register 10032 (advanced charging mode)."""
+        if not self.connected:
+            return False
+        try:
+            resp = await self._client.write_register(
+                address=_REG_ADVANCED_CHARGING_MODE,
+                value=int(mode.value),
+                device_id=_SLAVE_ID,
+            )
+            if resp.isError():
+                raise ModbusException(f"Advanced charging mode write error: {resp}")
+            self._state.ev_advanced_charging_mode = int(mode.value)
+            self._state.ev_advanced_charging_mode_enum = mode
+            return True
+        except (ModbusException, OSError) as exc:
+            logger.warning("Failed to write advanced charging mode: %s", exc)
+            return False
 
-        This register is a command register that does not hold state,
-        so we write unconditionally each iteration.
+    async def read_advanced_charging_mode(self) -> AdvancedChargingMode | None:
+        """Read register 10032 (advanced charging mode)."""
+        if not self.connected:
+            return None
+        try:
+            resp = await self._client.read_holding_registers(
+                address=_REG_ADVANCED_CHARGING_MODE,
+                count=1,
+                device_id=_SLAVE_ID,
+            )
+            if resp.isError():
+                raise ModbusException(f"Advanced charging mode read error: {resp}")
+            raw = resp.registers[0]
+            mode = AdvancedChargingMode.from_register(raw)
+            self._state.ev_advanced_charging_mode = raw
+            self._state.ev_advanced_charging_mode_enum = mode
+            return mode
+        except (ModbusException, OSError) as exc:
+            logger.warning("Failed to read advanced charging mode: %s", exc)
+            return None
+
+    async def write_plug_and_charge_auto_start(self, mode: PlugAndChargeAutoStart) -> bool:
+        """Write register 10019 (plug-and-charge auto start)."""
+        if not self.connected:
+            return False
+        try:
+            resp = await self._client.write_register(
+                address=_REG_PLUG_AND_CHARGE,
+                value=int(mode.value),
+                device_id=_SLAVE_ID,
+            )
+            if resp.isError():
+                raise ModbusException(f"Plug and charge write error: {resp}")
+            self._state.ev_plug_and_charge_auto_start = int(mode.value)
+            self._state.ev_plug_and_charge_auto_start_enum = mode
+            self._state.ev_plug_and_charge = mode == PlugAndChargeAutoStart.ON
+            return True
+        except (ModbusException, OSError) as exc:
+            logger.warning("Failed to write plug-and-charge auto start: %s", exc)
+            return False
+
+    async def write_single_phase_switching(self, mode: SinglePhaseSwitching) -> bool:
+        """Write register 10023 (single phase switching)."""
+        if not self.connected:
+            return False
+        try:
+            resp = await self._client.write_register(
+                address=_REG_SINGLE_PHASE_SWITCHING,
+                value=int(mode.value),
+                device_id=_SLAVE_ID,
+            )
+            if resp.isError():
+                raise ModbusException(f"Single phase switching write error: {resp}")
+            self._state.ev_single_phase_switching = int(mode.value)
+            self._state.ev_single_phase_switching_enum = mode
+            return True
+        except (ModbusException, OSError) as exc:
+            logger.warning("Failed to write single phase switching: %s", exc)
+            return False
+
+    async def read_plug_and_charge_auto_start(self) -> PlugAndChargeAutoStart | None:
+        """Read register 10019 (plug-and-charge auto start)."""
+        if not self.connected:
+            return None
+        try:
+            resp = await self._client.read_holding_registers(address=_REG_PLUG_AND_CHARGE, count=1, device_id=_SLAVE_ID)
+            if resp.isError():
+                raise ModbusException(f"EV charger plug and charge read error: {resp}")
+            raw = resp.registers[0]
+            mode = PlugAndChargeAutoStart.from_register(raw)
+            self._state.ev_plug_and_charge_auto_start = raw
+            self._state.ev_plug_and_charge_auto_start_enum = mode
+            self._state.ev_plug_and_charge = raw == 1
+            return mode
+        except (ModbusException, OSError) as exc:
+            logger.warning("Failed to read plug-and-charge auto start: %s", exc)
+            return None
+
+    async def read_single_phase_switching(self) -> SinglePhaseSwitching | None:
+        """Read register 10023 (single phase switching)."""
+        if not self.connected:
+            return None
+        try:
+            resp = await self._client.read_holding_registers(
+                address=_REG_SINGLE_PHASE_SWITCHING,
+                count=1,
+                device_id=_SLAVE_ID,
+            )
+            if resp.isError():
+                raise ModbusException(f"Single phase switching read error: {resp}")
+            raw = resp.registers[0]
+            mode = SinglePhaseSwitching.from_register(raw)
+            self._state.ev_single_phase_switching = raw
+            self._state.ev_single_phase_switching_enum = mode
+            return mode
+        except (ModbusException, OSError) as exc:
+            logger.warning("Failed to read single phase switching: %s", exc)
+            return None
+
+    async def start_charging(self) -> None:
+        """Send a one-shot start command (register 10060=2).
+
+        Register 10060 is a non-persistent command register. The charger clears
+        it after processing, so this method should only be called when a start
+        transition is required.
         """
         if not self.connected:
             return
         try:
             await self._client.write_register(address=_REG_CHARGER_ENABLE, value=2, device_id=_SLAVE_ID)
         except (ModbusException, OSError) as exc:
-            logger.warning("Failed to write charger enable: %s", exc)
+            logger.warning("Failed to send charger start command: %s", exc)
+
+    async def stop_charging(self) -> None:
+        """Send a one-shot stop command (register 10060=1).
+
+        Register 10060 is a non-persistent command register. The charger clears
+        it after processing, so this method should only be called when a stop
+        transition is required.
+        """
+        if not self.connected:
+            return
+        try:
+            await self._client.write_register(address=_REG_CHARGER_ENABLE, value=1, device_id=_SLAVE_ID)
+        except (ModbusException, OSError) as exc:
+            logger.warning("Failed to send charger stop command: %s", exc)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -192,6 +340,14 @@ class EVChargerModbusClient:
         if self._client is not None:
             self._client.close()
             self._client = None
+        self._serial_read_attempted = False
+
+    async def disconnect(self) -> None:
+        """Close the current Modbus connection.
+
+        Used by on-demand standby commands to avoid leaving background sessions open.
+        """
+        await self._close()
 
     async def _read_registers(self) -> None:
         """Read EV charger registers and update AppState."""
@@ -200,7 +356,7 @@ class EVChargerModbusClient:
         correction_pct = min(10.0, max(0.0, float(self._state.correction_pct)))
         correction_factor = 1.0 + (correction_pct / 100.0)
 
-        # Contiguous block: registers 10009–10017 (9 registers)
+        # Contiguous block: registers 10009–10018
         main_resp = await self._client.read_holding_registers(
             address=_REG_PHASE_A_VOLTAGE, count=_CONTIGUOUS_COUNT, device_id=_SLAVE_ID
         )
@@ -218,12 +374,16 @@ class EVChargerModbusClient:
         self._state.ev_session_energy_wh = regs[7] / 10.0 * 1000.0
         self._state.ev_charger_status = regs[8]
         self._state.ev_charger_status_enum = ChargerStatus.from_register(regs[8])
+        self._update_comm_connection_status(regs[9] if len(regs) > 9 else 0)
 
-        # Completion time (register 10031)
-        ct_resp = await self._client.read_holding_registers(address=_REG_COMPLETION_TIME, count=1, device_id=_SLAVE_ID)
+        # Completion time + advanced charging mode (registers 10031-10032)
+        ct_resp = await self._client.read_holding_registers(address=_REG_COMPLETION_TIME, count=2, device_id=_SLAVE_ID)
         if ct_resp.isError():
             raise ModbusException(f"EV charger completion time read error: {ct_resp}")
         self._state.ev_completion_time_h = ct_resp.registers[0]
+        mode_raw = ct_resp.registers[1] if len(ct_resp.registers) > 1 else None
+        self._state.ev_advanced_charging_mode = mode_raw
+        self._state.ev_advanced_charging_mode_enum = AdvancedChargingMode.from_register(mode_raw)
 
         # Total accumulated energy (registers 10065-10066, U32)
         te_resp = await self._client.read_holding_registers(address=_REG_TOTAL_ENERGY, count=2, device_id=_SLAVE_ID)
@@ -251,7 +411,22 @@ class EVChargerModbusClient:
         pnc_resp = await self._client.read_holding_registers(address=_REG_PLUG_AND_CHARGE, count=1, device_id=_SLAVE_ID)
         if pnc_resp.isError():
             raise ModbusException(f"EV charger plug and charge read error: {pnc_resp}")
-        self._state.ev_plug_and_charge = pnc_resp.registers[0] == 1
+        pnc_raw = pnc_resp.registers[0]
+        self._state.ev_plug_and_charge = pnc_raw == 1
+        self._state.ev_plug_and_charge_auto_start = pnc_raw
+        self._state.ev_plug_and_charge_auto_start_enum = PlugAndChargeAutoStart.from_register(pnc_raw)
+
+        # Single phase switching state (register 10023)
+        sps_resp = await self._client.read_holding_registers(
+            address=_REG_SINGLE_PHASE_SWITCHING,
+            count=1,
+            device_id=_SLAVE_ID,
+        )
+        if sps_resp.isError():
+            raise ModbusException(f"EV charger single phase switching read error: {sps_resp}")
+        sps_raw = sps_resp.registers[0]
+        self._state.ev_single_phase_switching = sps_raw
+        self._state.ev_single_phase_switching_enum = SinglePhaseSwitching.from_register(sps_raw)
 
         # Current setpoint (register 10029)
         sp_resp = await self._client.read_holding_registers(
@@ -278,3 +453,35 @@ class EVChargerModbusClient:
                 setattr(self._state, drop_attr, 100.0 * (victron_v - ev_v) / victron_v)
             else:
                 setattr(self._state, drop_attr, None)
+
+    async def _read_serial_number_once(self) -> None:
+        """Read serial number once on startup/connection and cache in AppState."""
+        if self._serial_read_attempted:
+            return
+        self._serial_read_attempted = True
+        if not self.connected:
+            return
+        try:
+            resp = await self._client.read_holding_registers(address=_REG_SERIAL_NUMBER, count=8, device_id=_SLAVE_ID)
+            if resp.isError():
+                raise ModbusException(f"EV charger serial number read error: {resp}")
+
+            raw_bytes = bytearray()
+            for reg in resp.registers:
+                raw_bytes.append((reg >> 8) & 0xFF)
+                raw_bytes.append(reg & 0xFF)
+
+            decoded = raw_bytes.decode("ascii", errors="ignore").replace("\x00", "").strip()
+            self._state.ev_serial_number = decoded[:8] if decoded else None
+        except (ModbusException, OSError) as exc:
+            logger.warning("Failed to read serial number: %s", exc)
+
+    def _update_comm_connection_status(self, raw: int) -> None:
+        """Decode register 10018 bitfield into AppState flags."""
+        self._state.ev_comm_connection_status_raw = raw
+        self._state.ev_comm_wifi_router_connected = bool(raw & (1 << 0))
+        self._state.ev_comm_iot_cloud_connected = bool(raw & (1 << 1))
+        self._state.ev_comm_inverter_online = bool(raw & (1 << 2))
+        self._state.ev_comm_mid_meter_online = bool(raw & (1 << 3))
+        self._state.ev_comm_gw_meter_online = bool(raw & (1 << 4))
+        self._state.ev_comm_ems_online = bool(raw & (1 << 5))

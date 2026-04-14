@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.modbus_ev import EVChargerModbusClient
-from app.state import AppState, ChargerStatus
+from app.state import AdvancedChargingMode, AppState, ChargerStatus, PlugAndChargeAutoStart, SinglePhaseSwitching
 
 # ---------------------------------------------------------------------------
 # Helper: build a fake Modbus response
@@ -100,8 +100,8 @@ class TestEVChargerModbusClient:
         # 10015=110 (11.0kW → 11000W), 10016=50 (5.0kWh → 5000Wh)
         # 10017=3 (charging)
         main_resp = _make_response([2280, 2290, 2270, 160, 155, 158, 110, 50, 3])
-        # Completion time = 2 hours
-        ct_resp = _make_response([2])
+        # Completion time = 2 hours, advanced charging mode = 1 (PV charging)
+        ct_resp = _make_response([2, 1])
         # Total energy U32: high=0, low=1500 → raw_u32=1500 → 150.0 kWh → 150000 Wh
         te_resp = _make_response([0, 1500])
         # Car connection = 2 (connected)
@@ -135,8 +135,10 @@ class TestEVChargerModbusClient:
         assert state.ev_charger_status_enum == ChargerStatus.CHARGING_IN_PROGRESS
         assert state.ev_charger_status_enum.display_name == "Charging in progress"
         assert state.ev_completion_time_h == 2
+        assert state.ev_advanced_charging_mode_enum == AdvancedChargingMode.PV_CHARGING
         assert state.ev_total_energy_wh == 150000.0
         assert state.ev_connected is True
+        assert state.ev_plug_and_charge_auto_start_enum == PlugAndChargeAutoStart.ON
 
         # Voltage drops: 100 * (victron - ev) / victron
         assert state.l1_voltage_drop_pct == pytest.approx(100.0 * (230.0 - 228.0) / 230.0)
@@ -442,6 +444,55 @@ class TestEVChargerModbusClient:
 
         await ec.write_setpoint(3680)
         # Should not raise
+
+    @pytest.mark.asyncio
+    async def test_write_advanced_charging_mode_success(self):
+        state = self._make_state()
+        ec = EVChargerModbusClient(state)
+
+        mock_client = AsyncMock()
+        mock_client.connected = True
+        mock_client.write_register = AsyncMock(return_value=_make_response([]))
+        ec._client = mock_client
+
+        ok = await ec.write_advanced_charging_mode(AdvancedChargingMode.PV_CHARGING)
+
+        assert ok is True
+        mock_client.write_register.assert_called_once_with(address=10032, value=1, device_id=247)
+        assert state.ev_advanced_charging_mode_enum == AdvancedChargingMode.PV_CHARGING
+
+    @pytest.mark.asyncio
+    async def test_write_plug_and_charge_auto_start_success(self):
+        state = self._make_state()
+        ec = EVChargerModbusClient(state)
+
+        mock_client = AsyncMock()
+        mock_client.connected = True
+        mock_client.write_register = AsyncMock(return_value=_make_response([]))
+        ec._client = mock_client
+
+        ok = await ec.write_plug_and_charge_auto_start(PlugAndChargeAutoStart.OFF)
+
+        assert ok is True
+        mock_client.write_register.assert_called_once_with(address=10019, value=0, device_id=247)
+        assert state.ev_plug_and_charge_auto_start_enum == PlugAndChargeAutoStart.OFF
+        assert state.ev_plug_and_charge is False
+
+    @pytest.mark.asyncio
+    async def test_write_single_phase_switching_success(self):
+        state = self._make_state()
+        ec = EVChargerModbusClient(state)
+
+        mock_client = AsyncMock()
+        mock_client.connected = True
+        mock_client.write_register = AsyncMock(return_value=_make_response([]))
+        ec._client = mock_client
+
+        ok = await ec.write_single_phase_switching(SinglePhaseSwitching.ENABLED)
+
+        assert ok is True
+        mock_client.write_register.assert_called_once_with(address=10023, value=1, device_id=247)
+        assert state.ev_single_phase_switching_enum == SinglePhaseSwitching.ENABLED
 
     # --- reconnect ---
 
