@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.modbus_ev import EVChargerModbusClient
+from app.modbus import EVChargerModbusClient
 from app.state import AdvancedChargingMode, AppState, ChargerStatus, PlugAndChargeAutoStart, SinglePhaseSwitching
 
 # ---------------------------------------------------------------------------

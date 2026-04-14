@@ -18,6 +18,25 @@ A Docker-based integration that bridges a GW22K-HCA-20 EV charger and a Victron 
 - **Runtime charger memory controls** from HA for advanced charging mode, plug-and-charge auto start, single-phase switching, and max grid power draw
 - **Diagnostics** for charger communication link bitfield and per-link online states
 
+## Code Organization
+
+The codebase is split by domain to keep runtime behavior and integration boundaries clear:
+
+- `app/control/`
+   - Core charging policy and orchestration
+   - Setpoint logic, charging event state machine, and snapshot building
+- `app/modbus/`
+   - Device protocol clients for EV charger and Victron GX
+   - Register reads/writes, reconnect/backoff behavior, and protocol decoding
+- `app/ha/`
+   - Home Assistant MQTT discovery, state publishing, and command handling
+- `app/state/`
+   - Shared enums and dataclasses (`AppState`, `StateSnapshot`, persisted fields)
+- `app/config.py`
+   - YAML load/validate/persist lifecycle
+
+Cross-cutting helpers (for example exponential backoff) stay outside domain packages when used by multiple domains.
+
 ## Charge Modes
 
 ### Eco Mode

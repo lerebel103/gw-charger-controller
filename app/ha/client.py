@@ -12,7 +12,7 @@ import aiomqtt
 
 from app.backoff import exponential_backoff
 from app.config import ConfigManager
-from app.control_loop import normalise_hhmm, validate_hhmm
+from app.control import normalise_hhmm, validate_hhmm
 from app.ha.constants import (
     COMMAND_MAP as _COMMAND_MAP,
 )

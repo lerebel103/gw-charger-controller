@@ -5,7 +5,7 @@ from __future__ import annotations
 import time as _time
 from unittest.mock import AsyncMock, MagicMock
 
-from app.control_loop import (
+from app.control import (
     _ECO_DAY_COOLDOWN_S,
     _ECO_DAY_RAMP_STEP_W,
     _GRID_EXPORT_START_THRESHOLD_W,
@@ -829,7 +829,7 @@ class TestEvMaxSoc:
         # Simulate one run_loop iteration's disconnect detection
         # We test the logic directly
         if not state.ev_connected and cl._prev_ev_connected is not False:
-            from app.control_loop import _EV_MAX_SOC_DEFAULT
+            from app.control import _EV_MAX_SOC_DEFAULT
 
             state.ev_max_soc_pct = _EV_MAX_SOC_DEFAULT
         assert state.ev_max_soc_pct == 80.0

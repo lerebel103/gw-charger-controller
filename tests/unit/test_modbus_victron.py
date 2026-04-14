@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.modbus_victron import VictronModbusClient, _uint16_to_int16
+from app.modbus import VictronModbusClient, _uint16_to_int16
 from app.state import AppState
 
 # ---------------------------------------------------------------------------
