@@ -505,15 +505,22 @@ class EVChargerModbusClient:
             raise ModbusException(f"EV charger setpoint read error: {sp_resp}")
         self._state.ev_charger_setpoint_raw = sp_resp.registers[0]
 
-        # Max grid drawing power (register 10039)
-        mgp_resp = await self._client.read_holding_registers(
-            address=_REG_MAX_GRID_POWER_DRAW,
-            count=1,
-            device_id=_SLAVE_ID,
-        )
-        if mgp_resp.isError():
-            raise ModbusException(f"EV charger max grid power draw read error: {mgp_resp}")
-        self._state.ev_max_grid_power_draw_raw = mgp_resp.registers[0]
+        # Max grid drawing power (register 10039) is best-effort because some
+        # charger firmware variants may not expose this register consistently.
+        try:
+            mgp_resp = await self._client.read_holding_registers(
+                address=_REG_MAX_GRID_POWER_DRAW,
+                count=1,
+                device_id=_SLAVE_ID,
+            )
+            if mgp_resp.isError():
+                logger.warning("EV charger max grid power draw read error: %s", mgp_resp)
+                self._state.ev_max_grid_power_draw_raw = None
+            else:
+                self._state.ev_max_grid_power_draw_raw = mgp_resp.registers[0]
+        except (ModbusException, OSError) as exc:
+            logger.warning("Failed to read max grid power draw (register %d): %s", _REG_MAX_GRID_POWER_DRAW, exc)
+            self._state.ev_max_grid_power_draw_raw = None
 
         # Compute voltage drop percentages
         self._compute_voltage_drops()
