@@ -67,8 +67,8 @@ def parse_single_phase_payload(payload: str) -> SinglePhaseSwitching | None:
     return SinglePhaseSwitching.from_register(raw)
 
 
-def parse_max_charging_power_payload(payload: str) -> float | None:
-    """Parse max charging power payload in watts (physical range 4200-22000 W)."""
+def parse_max_grid_power_draw_payload(payload: str) -> float | None:
+    """Parse max grid power draw payload in watts (physical range 4200-22000 W)."""
     try:
         value = float(str(payload).strip())
     except (TypeError, ValueError):

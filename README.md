@@ -15,7 +15,7 @@ A Docker-based integration that bridges a GW22K-HCA-20 EV charger and a Victron 
 - **All 3-phase** voltage, current, and voltage drop sensors
 - **Total lifetime energy** tracking (register 10065, U32)
 - **Runtime configuration** — all settings adjustable from HA without restarting
-- **Runtime charger memory controls** from HA for advanced charging mode, plug-and-charge auto start, single-phase switching, and max charging power
+- **Runtime charger memory controls** from HA for advanced charging mode, plug-and-charge auto start, single-phase switching, and max grid power draw
 - **Diagnostics** for charger communication link bitfield and per-link online states
 
 ## Charge Modes
@@ -52,7 +52,7 @@ Standby includes a narrow user-initiated exception path for runtime charger memo
 - Advanced Charging Mode (register 10032)
 - Plug and Charge Auto Start (register 10019)
 - Single Phase Switching (register 10023)
-- Max Charging Power (register 10029)
+- Max Grid Power Draw (register 10039)
 
 These standby exceptions are on-demand only and use a short-lived session (connect -> write -> readback -> disconnect).
 
@@ -70,8 +70,8 @@ The following controls are exposed in Home Assistant and are not persisted to co
 - **Single Phase Switching** (`switch`)
    - Off
    - On
-- **Max Charging Power** (`number`)
-   - 4200-22000 W (register 10029 raw range 42-220)
+- **Max Grid Power Draw** (`number`)
+   - 4200-22000 W (register 10039 raw range 42-220)
 
 Outside standby these values are polled and reflected continuously. In standby they can still be changed via the exception path above.
 

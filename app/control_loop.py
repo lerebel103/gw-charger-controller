@@ -788,7 +788,7 @@ class ControlLoop:
                 ev_connected=self._state.ev_connected,
                 ev_charger_status=self._state.ev_charger_status,
                 ev_charger_status_display=self._state.ev_charger_status_enum.display_name
-                if self._state.ev_charger_status_enum
+                if self._state.ev_charger_status_enum is not None
                 else None,
                 ev_comm_connection_status_raw=self._state.ev_comm_connection_status_raw,
                 ev_comm_wifi_router_connected=self._state.ev_comm_wifi_router_connected,
@@ -799,16 +799,16 @@ class ControlLoop:
                 ev_comm_ems_online=self._state.ev_comm_ems_online,
                 ev_serial_number=self._state.ev_serial_number,
                 ev_advanced_charging_mode_display=self._state.ev_advanced_charging_mode_enum.display_name
-                if self._state.ev_advanced_charging_mode_enum
+                if self._state.ev_advanced_charging_mode_enum is not None
                 else None,
                 ev_plug_and_charge_auto_start_display=self._state.ev_plug_and_charge_auto_start_enum.display_name
-                if self._state.ev_plug_and_charge_auto_start_enum
+                if self._state.ev_plug_and_charge_auto_start_enum is not None
                 else None,
                 ev_single_phase_switching_display=self._state.ev_single_phase_switching_enum.display_name
-                if self._state.ev_single_phase_switching_enum
+                if self._state.ev_single_phase_switching_enum is not None
                 else None,
-                ev_max_charging_power_w=(self._state.ev_charger_setpoint_raw * 100.0)
-                if self._state.ev_charger_setpoint_raw is not None
+                ev_max_grid_power_draw_w=(self._state.ev_max_grid_power_draw_raw * 100.0)
+                if self._state.ev_max_grid_power_draw_raw is not None
                 else None,
                 ev_active_power_w=self._state.ev_active_power_w,
                 ev_session_energy_wh=self._state.ev_session_energy_wh,

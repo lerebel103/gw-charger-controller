@@ -31,6 +31,7 @@ _REG_CAR_CONNECTION = 10075
 _REG_PLUG_AND_CHARGE = 10019
 _REG_SINGLE_PHASE_SWITCHING = 10023
 _REG_MAX_CHARGING_POWER = 10029
+_REG_MAX_GRID_POWER_DRAW = 10039
 _REG_CHARGER_ENABLE = 10060
 _RAW_SETPOINT_MIN = 44  # practical minimum to reliably start charging (= 4.4 kW)
 _RAW_RUNTIME_SETPOINT_MIN = 42  # documented physical minimum (= 4.2 kW)
@@ -192,6 +193,12 @@ class EVChargerModbusClient:
                 raise ModbusException(f"Advanced charging mode write error: {resp}")
             self._state.ev_advanced_charging_mode = int(mode.value)
             self._state.ev_advanced_charging_mode_enum = mode
+            logger.info(
+                "Wrote advanced charging mode: register %d <- raw=%d (%s)",
+                _REG_ADVANCED_CHARGING_MODE,
+                int(mode.value),
+                mode.display_name,
+            )
             return True
         except (ModbusException, OSError) as exc:
             logger.warning("Failed to write advanced charging mode: %s", exc)
@@ -233,6 +240,12 @@ class EVChargerModbusClient:
             self._state.ev_plug_and_charge_auto_start = int(mode.value)
             self._state.ev_plug_and_charge_auto_start_enum = mode
             self._state.ev_plug_and_charge = mode == PlugAndChargeAutoStart.ON
+            logger.info(
+                "Wrote plug-and-charge auto start: register %d <- raw=%d (%s)",
+                _REG_PLUG_AND_CHARGE,
+                int(mode.value),
+                mode.display_name,
+            )
             return True
         except (ModbusException, OSError) as exc:
             logger.warning("Failed to write plug-and-charge auto start: %s", exc)
@@ -252,13 +265,19 @@ class EVChargerModbusClient:
                 raise ModbusException(f"Single phase switching write error: {resp}")
             self._state.ev_single_phase_switching = int(mode.value)
             self._state.ev_single_phase_switching_enum = mode
+            logger.info(
+                "Wrote single phase switching: register %d <- raw=%d (%s)",
+                _REG_SINGLE_PHASE_SWITCHING,
+                int(mode.value),
+                mode.display_name,
+            )
             return True
         except (ModbusException, OSError) as exc:
             logger.warning("Failed to write single phase switching: %s", exc)
             return False
 
-    async def write_max_charging_power(self, power_w: float) -> bool:
-        """Write register 10029 (max charging power) using physical range 4200-22000 W."""
+    async def write_max_grid_power_draw(self, power_w: float) -> bool:
+        """Write register 10039 (max grid drawing power) using physical range 4200-22000 W."""
         if not self.connected:
             return False
 
@@ -267,16 +286,22 @@ class EVChargerModbusClient:
 
         try:
             resp = await self._client.write_register(
-                address=_REG_MAX_CHARGING_POWER,
+                address=_REG_MAX_GRID_POWER_DRAW,
                 value=raw,
                 device_id=_SLAVE_ID,
             )
             if resp.isError():
-                raise ModbusException(f"Max charging power write error: {resp}")
-            self._state.ev_charger_setpoint_raw = raw
+                raise ModbusException(f"Max grid power draw write error: {resp}")
+            self._state.ev_max_grid_power_draw_raw = raw
+            logger.info(
+                "Wrote max grid power draw: register %d <- raw=%d (%.0f W)",
+                _REG_MAX_GRID_POWER_DRAW,
+                raw,
+                raw * 100.0,
+            )
             return True
         except (ModbusException, OSError) as exc:
-            logger.warning("Failed to write max charging power: %s", exc)
+            logger.warning("Failed to write max grid power draw: %s", exc)
             return False
 
     async def read_plug_and_charge_auto_start(self) -> PlugAndChargeAutoStart | None:
@@ -318,23 +343,23 @@ class EVChargerModbusClient:
             logger.warning("Failed to read single phase switching: %s", exc)
             return None
 
-    async def read_max_charging_power(self) -> float | None:
-        """Read register 10029 (max charging power) and return watts."""
+    async def read_max_grid_power_draw(self) -> float | None:
+        """Read register 10039 (max grid drawing power) and return watts."""
         if not self.connected:
             return None
         try:
             resp = await self._client.read_holding_registers(
-                address=_REG_MAX_CHARGING_POWER,
+                address=_REG_MAX_GRID_POWER_DRAW,
                 count=1,
                 device_id=_SLAVE_ID,
             )
             if resp.isError():
-                raise ModbusException(f"Max charging power read error: {resp}")
+                raise ModbusException(f"Max grid power draw read error: {resp}")
             raw = resp.registers[0]
-            self._state.ev_charger_setpoint_raw = raw
+            self._state.ev_max_grid_power_draw_raw = raw
             return raw * 100.0
         except (ModbusException, OSError) as exc:
-            logger.warning("Failed to read max charging power: %s", exc)
+            logger.warning("Failed to read max grid power draw: %s", exc)
             return None
 
     async def start_charging(self) -> None:
@@ -479,6 +504,16 @@ class EVChargerModbusClient:
         if sp_resp.isError():
             raise ModbusException(f"EV charger setpoint read error: {sp_resp}")
         self._state.ev_charger_setpoint_raw = sp_resp.registers[0]
+
+        # Max grid drawing power (register 10039)
+        mgp_resp = await self._client.read_holding_registers(
+            address=_REG_MAX_GRID_POWER_DRAW,
+            count=1,
+            device_id=_SLAVE_ID,
+        )
+        if mgp_resp.isError():
+            raise ModbusException(f"EV charger max grid power draw read error: {mgp_resp}")
+        self._state.ev_max_grid_power_draw_raw = mgp_resp.registers[0]
 
         # Compute voltage drop percentages
         self._compute_voltage_drops()

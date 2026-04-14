@@ -47,7 +47,7 @@ from app.ha.parsers import (
     parse_advanced_mode_payload as _parse_advanced_mode_payload,
 )
 from app.ha.parsers import (
-    parse_max_charging_power_payload as _parse_max_charging_power_payload,
+    parse_max_grid_power_draw_payload as _parse_max_grid_power_draw_payload,
 )
 from app.ha.parsers import (
     parse_plug_and_charge_payload as _parse_plug_and_charge_payload,
@@ -243,8 +243,8 @@ class MQTTClient:
             retain=True,
         )
         await self._client.publish(
-            f"{_PREFIX}/number/max_charging_power/state",
-            _fmt(snapshot.ev_max_charging_power_w),
+            f"{_PREFIX}/number/max_grid_power_draw/state",
+            _fmt(snapshot.ev_max_grid_power_draw_w),
             retain=True,
         )
 
@@ -278,7 +278,9 @@ class MQTTClient:
             (f"{_PREFIX}/text/victron_ip/state", s.victron_ip),
             (
                 f"{_PREFIX}/select/advanced_charging_mode/state",
-                s.ev_advanced_charging_mode_enum.display_name if s.ev_advanced_charging_mode_enum else "unavailable",
+                s.ev_advanced_charging_mode_enum.display_name
+                if s.ev_advanced_charging_mode_enum is not None
+                else "unavailable",
             ),
             (
                 f"{_PREFIX}/switch/plug_and_charge_auto_start/state",
@@ -297,8 +299,10 @@ class MQTTClient:
                 else "unavailable",
             ),
             (
-                f"{_PREFIX}/number/max_charging_power/state",
-                str(s.ev_charger_setpoint_raw * 100.0) if s.ev_charger_setpoint_raw is not None else "unavailable",
+                f"{_PREFIX}/number/max_grid_power_draw/state",
+                str(s.ev_max_grid_power_draw_raw * 100.0)
+                if s.ev_max_grid_power_draw_raw is not None
+                else "unavailable",
             ),
         ]
         for topic, value in pairs:
@@ -438,18 +442,20 @@ class MQTTClient:
                 return
             writer = self._ev_client.write_single_phase_switching
             reader = self._ev_client.read_single_phase_switching
-        elif attr == "ev_max_charging_power":
-            number_value_w = _parse_max_charging_power_payload(payload)
+        elif attr == "ev_max_grid_power_draw":
+            number_value_w = _parse_max_grid_power_draw_payload(payload)
             if number_value_w is None:
                 logger.warning("Invalid number value '%s' for %s", payload, attr)
                 return
             current_w = (
-                self._state.ev_charger_setpoint_raw * 100.0 if self._state.ev_charger_setpoint_raw is not None else None
+                self._state.ev_max_grid_power_draw_raw * 100.0
+                if self._state.ev_max_grid_power_draw_raw is not None
+                else None
             )
             if current_w is not None and abs(current_w - number_value_w) < 0.5:
                 return
-            writer = self._ev_client.write_max_charging_power
-            reader = self._ev_client.read_max_charging_power
+            writer = self._ev_client.write_max_grid_power_draw
+            reader = self._ev_client.read_max_grid_power_draw
         else:
             logger.warning("Unsupported runtime EV select field: %s", attr)
             return
@@ -462,7 +468,7 @@ class MQTTClient:
             return
 
         try:
-            if attr == "ev_max_charging_power":
+            if attr == "ev_max_grid_power_draw":
                 ok = await writer(number_value_w)
             else:
                 ok = await writer(enum_value)
@@ -478,10 +484,10 @@ class MQTTClient:
                     state_value = "OFF"
                 else:
                     state_value = "unavailable"
-            elif attr == "ev_max_charging_power":
+            elif attr == "ev_max_grid_power_draw":
                 state_value = str(confirmed) if confirmed is not None else "unavailable"
             else:
-                state_value = confirmed.display_name if confirmed else "unavailable"
+                state_value = confirmed.display_name if confirmed is not None else "unavailable"
 
             state_topic = _CMD_TO_STATE_TOPIC.get(topic)
             if state_topic and self._client is not None:

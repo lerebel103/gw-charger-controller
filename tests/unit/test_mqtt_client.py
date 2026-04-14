@@ -137,6 +137,11 @@ class TestMQTTRuntimeEVSelects:
 
         ev.write_advanced_charging_mode.assert_awaited_once_with(AdvancedChargingMode.FAST_CHARGING)
         ev.read_advanced_charging_mode.assert_awaited_once()
+        client._client.publish.assert_any_await(
+            "ev_charger/select/advanced_charging_mode/state",
+            "Fast charging",
+            retain=True,
+        )
 
     @pytest.mark.asyncio
     async def test_runtime_advanced_mode_noop_does_not_connect(self):
@@ -196,7 +201,7 @@ class TestMQTTRuntimeEVSelects:
         ev.disconnect.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_runtime_max_charging_power_allowed_in_standby_with_disconnect(self):
+    async def test_runtime_max_grid_power_draw_allowed_in_standby_with_disconnect(self):
         state = AppState(charge_mode="Standby")
         cfg = MagicMock()
         queue: asyncio.Queue = asyncio.Queue()
@@ -204,21 +209,21 @@ class TestMQTTRuntimeEVSelects:
         ev.connected = True
         ev.ensure_connected = AsyncMock()
         ev.disconnect = AsyncMock()
-        ev.write_max_charging_power = AsyncMock(return_value=True)
-        ev.read_max_charging_power = AsyncMock(return_value=4200.0)
+        ev.write_max_grid_power_draw = AsyncMock(return_value=True)
+        ev.read_max_grid_power_draw = AsyncMock(return_value=4200.0)
 
         client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue, ev_client=ev)
         client._client = AsyncMock()
 
-        await client._handle_command("ev_charger/number/max_charging_power/set", "4200")
+        await client._handle_command("ev_charger/number/max_grid_power_draw/set", "4200")
 
         ev.ensure_connected.assert_awaited_once()
-        ev.write_max_charging_power.assert_awaited_once_with(4200.0)
-        ev.read_max_charging_power.assert_awaited_once()
+        ev.write_max_grid_power_draw.assert_awaited_once_with(4200.0)
+        ev.read_max_grid_power_draw.assert_awaited_once()
         ev.disconnect.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_runtime_max_charging_power_invalid_range_rejected(self):
+    async def test_runtime_max_grid_power_draw_invalid_range_rejected(self):
         state = AppState(charge_mode="Standby")
         cfg = MagicMock()
         queue: asyncio.Queue = asyncio.Queue()
@@ -230,7 +235,7 @@ class TestMQTTRuntimeEVSelects:
         client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue, ev_client=ev)
         client._client = AsyncMock()
 
-        await client._handle_command("ev_charger/number/max_charging_power/set", "4100")
+        await client._handle_command("ev_charger/number/max_grid_power_draw/set", "4100")
 
         ev.ensure_connected.assert_not_awaited()
         ev.disconnect.assert_not_awaited()
@@ -250,3 +255,36 @@ class TestMQTTChargeModeSelect:
 
         cfg.schedule_persist.assert_not_called()
         client._client.publish.assert_not_awaited()
+
+
+class TestMQTTPublishConfigState:
+    @pytest.mark.asyncio
+    async def test_publish_config_state_handles_zero_valued_runtime_enums(self):
+        state = AppState(
+            ev_advanced_charging_mode_enum=AdvancedChargingMode.FAST_CHARGING,
+            ev_plug_and_charge_auto_start_enum=PlugAndChargeAutoStart.OFF,
+            ev_single_phase_switching_enum=SinglePhaseSwitching.DISABLED,
+        )
+        cfg = MagicMock()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue)
+        client._client = AsyncMock()
+
+        await client._publish_config_state()
+
+        client._client.publish.assert_any_await(
+            "ev_charger/select/advanced_charging_mode/state",
+            "Fast charging",
+            retain=True,
+        )
+        client._client.publish.assert_any_await(
+            "ev_charger/switch/plug_and_charge_auto_start/state",
+            "OFF",
+            retain=True,
+        )
+        client._client.publish.assert_any_await(
+            "ev_charger/switch/single_phase_switching/state",
+            "OFF",
+            retain=True,
+        )

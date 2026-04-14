@@ -9,6 +9,7 @@ VEHICLE_SOC_TOPIC = f"{PREFIX}/vehicle/soc/set"
 
 DEPRECATED_DISCOVERY_TOPICS = [
     "homeassistant/select/ev_charger_plug_and_charge_auto_start/config",
+    "homeassistant/number/ev_charger_max_charging_power/config",
 ]
 
 # Maps command_topic -> (state_attr, value_type)
@@ -18,7 +19,7 @@ COMMAND_MAP: dict[str, tuple[str, str]] = {
     f"{PREFIX}/select/advanced_charging_mode/set": ("ev_advanced_charging_mode", "select"),
     f"{PREFIX}/switch/plug_and_charge_auto_start/set": ("ev_plug_and_charge_auto_start", "switch"),
     f"{PREFIX}/switch/single_phase_switching/set": ("ev_single_phase_switching", "switch"),
-    f"{PREFIX}/number/max_charging_power/set": ("ev_max_charging_power", "float"),
+    f"{PREFIX}/number/max_grid_power_draw/set": ("ev_max_grid_power_draw", "float"),
     f"{PREFIX}/number/manual_power/set": ("manual_power_w", "float"),
     f"{PREFIX}/number/ev_min_soc/set": ("ev_min_soc_pct", "float"),
     f"{PREFIX}/number/ev_max_soc/set": ("ev_max_soc_pct", "float"),
@@ -67,7 +68,7 @@ RUNTIME_EV_COMMAND_FIELDS = {
     "ev_advanced_charging_mode",
     "ev_plug_and_charge_auto_start",
     "ev_single_phase_switching",
-    "ev_max_charging_power",
+    "ev_max_grid_power_draw",
 }
 
 EV_RECONNECT_FIELDS = {"ev_charger_ip", "ev_charger_port"}

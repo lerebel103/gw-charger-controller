@@ -228,6 +228,7 @@ class AppState:
     ev_plug_and_charge_auto_start: int | None = None
     ev_plug_and_charge_auto_start_enum: PlugAndChargeAutoStart | None = None
     ev_charger_setpoint_raw: int | None = None  # register 10029: current setpoint as read from charger
+    ev_max_grid_power_draw_raw: int | None = None  # register 10039: max grid drawing power (raw)
     ev_soc_pct: float | None = None
     ev_soc_pct_updated_at: float | None = None  # time.monotonic() of last SOC update
 
@@ -318,7 +319,7 @@ class StateSnapshot:
     ev_advanced_charging_mode_display: str | None = None
     ev_plug_and_charge_auto_start_display: str | None = None
     ev_single_phase_switching_display: str | None = None
-    ev_max_charging_power_w: float | None = None
+    ev_max_grid_power_draw_w: float | None = None
     ev_active_power_w: float | None = None
     ev_session_energy_wh: float | None = None
     ev_voltage_l1_v: float | None = None

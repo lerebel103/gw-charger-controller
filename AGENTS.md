@@ -17,7 +17,7 @@ An explicit exception is allowed for user-initiated Home Assistant commands that
 - Register **10032** (Advanced Charging Mode)
 - Register **10019** (Plug and Charge auto start)
 - Register **10023** (Single phase switching)
-- Register **10029** (Max charging power)
+- Register **10039** (Max grid power draw)
 
 Constraints for this exception:
 - Must be **on-demand only** (no periodic polling/writing)

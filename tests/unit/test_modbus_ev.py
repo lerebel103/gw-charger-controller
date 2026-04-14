@@ -118,6 +118,7 @@ class TestEVChargerModbusClient:
                 _make_response([1]),
                 en_resp,
                 _make_response([0]),
+                _make_response([0]),
             ]
         )
 
@@ -166,6 +167,7 @@ class TestEVChargerModbusClient:
                 _make_response([1]),
                 _make_response([2]),
                 _make_response([0]),
+                _make_response([0]),
             ]
         )
 
@@ -193,6 +195,7 @@ class TestEVChargerModbusClient:
                 cc_resp,
                 _make_response([1]),
                 _make_response([2]),
+                _make_response([0]),
                 _make_response([0]),
             ]
         )
@@ -224,6 +227,7 @@ class TestEVChargerModbusClient:
                 _make_response([1]),
                 _make_response([2]),
                 _make_response([0]),
+                _make_response([0]),
             ]
         )
 
@@ -252,6 +256,7 @@ class TestEVChargerModbusClient:
                 te_resp,
                 cc_resp,
                 _make_response([2]),
+                _make_response([0]),
                 _make_response([0]),
                 _make_response([0]),
             ]
@@ -347,6 +352,7 @@ class TestEVChargerModbusClient:
                 _make_response([1]),
                 _make_response([2]),
                 _make_response([0]),
+                _make_response([0]),
             ]
         )
 
@@ -381,6 +387,7 @@ class TestEVChargerModbusClient:
                 _make_response([1]),
                 _make_response([2]),
                 _make_response([0]),
+                _make_response([0]),
             ]
         )
 
@@ -409,6 +416,7 @@ class TestEVChargerModbusClient:
                 cc_resp,
                 _make_response([1]),
                 _make_response([2]),
+                _make_response([0]),
                 _make_response([0]),
             ]
         )
@@ -542,7 +550,7 @@ class TestEVChargerModbusClient:
         assert state.ev_single_phase_switching_enum == SinglePhaseSwitching.ENABLED
 
     @pytest.mark.asyncio
-    async def test_write_max_charging_power_success(self):
+    async def test_write_max_grid_power_draw_success(self):
         state = self._make_state()
         ec = EVChargerModbusClient(state)
 
@@ -551,14 +559,14 @@ class TestEVChargerModbusClient:
         mock_client.write_register = AsyncMock(return_value=_make_response([]))
         ec._client = mock_client
 
-        ok = await ec.write_max_charging_power(4200)
+        ok = await ec.write_max_grid_power_draw(4200)
 
         assert ok is True
-        mock_client.write_register.assert_called_once_with(address=10029, value=42, device_id=247)
-        assert state.ev_charger_setpoint_raw == 42
+        mock_client.write_register.assert_called_once_with(address=10039, value=42, device_id=247)
+        assert state.ev_max_grid_power_draw_raw == 42
 
     @pytest.mark.asyncio
-    async def test_read_max_charging_power_success(self):
+    async def test_read_max_grid_power_draw_success(self):
         state = self._make_state()
         ec = EVChargerModbusClient(state)
 
@@ -567,10 +575,10 @@ class TestEVChargerModbusClient:
         mock_client.read_holding_registers = AsyncMock(return_value=_make_response([220]))
         ec._client = mock_client
 
-        value_w = await ec.read_max_charging_power()
+        value_w = await ec.read_max_grid_power_draw()
 
         assert value_w == 22000.0
-        assert state.ev_charger_setpoint_raw == 220
+        assert state.ev_max_grid_power_draw_raw == 220
 
     # --- reconnect ---
 
