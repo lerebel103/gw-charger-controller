@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time as _time
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from app.control.constants import _EXTERNAL_STOP_CONFIRM_TICKS, _STOPPED_DELAY_S, _STOPPING_MIN_DELAY_S
@@ -17,14 +17,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class ChargeSessionState(str, Enum):
+class ChargeSessionState(StrEnum):
     IDLE = "idle"
     CHARGING = "charging"
     STOPPING = "stopping"
     STOPPED_PENDING = "stopped_pending"
 
 
-class ChargeModeState(str, Enum):
+class ChargeModeState(StrEnum):
     IDLE = "idle"
     NO_VEHICLE = "no_vehicle"
     MAX_SOC_BLOCKED = "max_soc_blocked"
