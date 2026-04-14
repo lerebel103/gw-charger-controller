@@ -24,6 +24,10 @@ def _make_loop(state: AppState, **overrides) -> ControlLoop:
     victron = MagicMock()
     victron.connected = overrides.pop("victron_connected", True)
     ev = AsyncMock()
+    try:
+        _asyncio.get_event_loop()
+    except RuntimeError:
+        _asyncio.set_event_loop(_asyncio.new_event_loop())
     queue = _asyncio.Queue()
     return ControlLoop(state, victron, ev, queue)
 
@@ -858,6 +862,7 @@ class TestChargingEvents:
             charge_mode="Manual",
             manual_power_w=7000.0,
             ev_active_power_w=5000.0,
+            ev_charger_status_enum=ChargerStatus.CHARGING_IN_PROGRESS,
             ev_session_energy_wh=3000.0,
         )
         defaults.update(overrides)
@@ -1018,22 +1023,32 @@ class TestChargingEvents:
         reason = cl._determine_stop_reason()
         assert reason == "standby"
 
-    def test_external_stop_when_ev_power_drops_to_zero(self):
-        """External stop enters stopped_pending (no immediate event)."""
-        state = self._make_state(ev_active_power_w=0.0, ev_session_energy_wh=8000.0)
+    def test_external_stop_when_status_reports_not_charging_for_two_ticks(self):
+        """External stop requires two consecutive non-charging status ticks."""
+        state = self._make_state(
+            ev_charger_status_enum=ChargerStatus.CHARGING_COMPLETED,
+            ev_session_energy_wh=8000.0,
+        )
         cl = _make_loop(state)
         cl._charging_state = "charging"
         cl._last_positive_setpoint = 7000.0
-        result = cl._apply_charging_events(7000.0)  # setpoint still positive
+
+        # First tick only increments confirmation counter.
+        first = cl._apply_charging_events(7000.0)
+        assert first == 7000.0
+        assert cl._charging_state == "charging"
+
+        # Second consecutive tick confirms external stop.
+        result = cl._apply_charging_events(7000.0)
         assert result == 0.0  # overridden to 0
         events = self._get_events(cl)
         assert len(events) == 0  # no event yet — in stopped_pending
         assert cl._charging_state == "stopped_pending"
         assert cl._stopping_reason == "external_stop"
 
-    def test_no_external_stop_when_ev_power_positive(self):
-        """No external stop when charger is still drawing power."""
-        state = self._make_state(ev_active_power_w=5000.0)
+    def test_no_external_stop_when_status_is_charging(self):
+        """No external stop while status indicates active charging."""
+        state = self._make_state(ev_charger_status_enum=ChargerStatus.CHARGING_IN_PROGRESS)
         cl = _make_loop(state)
         cl._charging_state = "charging"
         cl._last_positive_setpoint = 7000.0
@@ -1041,6 +1056,16 @@ class TestChargingEvents:
         assert result == 7000.0
         events = self._get_events(cl)
         assert len(events) == 0
+
+    def test_no_external_stop_on_unknown_status(self):
+        """Unknown status should not force external stop transitions."""
+        state = self._make_state(ev_charger_status_enum=ChargerStatus.UNKNOWN)
+        cl = _make_loop(state)
+        cl._charging_state = "charging"
+        cl._last_positive_setpoint = 7000.0
+        result = cl._apply_charging_events(7000.0)
+        assert result == 7000.0
+        assert cl._charging_state == "charging"
 
     def test_car_disconnect_triggers_normal_stopping_flow(self):
         """Car disconnect causes _compute_setpoint to return 0, triggering normal stopping."""
@@ -1056,25 +1081,15 @@ class TestChargingEvents:
         assert events[0]["event"] == "stopping"
         assert cl._charging_state == "stopping"
 
-    def test_external_stop_when_power_drops_to_zero(self):
-        """External stop enters stopped_pending when charger stops drawing power."""
-        state = self._make_state(ev_active_power_w=0.0)
-        cl = _make_loop(state)
-        cl._charging_state = "charging"
-        cl._last_positive_setpoint = 7000.0
-        result = cl._apply_charging_events(7000.0)
-        assert result == 0.0  # setpoint overridden to 0 since charger stopped
-        events = self._get_events(cl)
-        assert len(events) == 0  # no event yet — in stopped_pending
-        assert cl._charging_state == "stopped_pending"
-
     def test_external_stop_vehicle_disconnected(self):
         """Stopped_pending with vehicle_disconnected reason when EV unplugged externally."""
-        state = self._make_state(ev_connected=False, ev_active_power_w=0.0)
+        state = self._make_state(ev_connected=False, ev_charger_status_enum=ChargerStatus.IDLE_NO_CONNECTOR)
         cl = _make_loop(state)
         cl._charging_state = "charging"
         cl._last_positive_setpoint = 7000.0
-        cl._apply_charging_events(7000.0)
+        cl._apply_charging_events(7000.0)  # tick 1
+        result = cl._apply_charging_events(7000.0)  # tick 2
+        assert result == 0.0
         events = self._get_events(cl)
         assert len(events) == 0  # no event yet — in stopped_pending
         assert cl._charging_state == "stopped_pending"
@@ -1082,7 +1097,10 @@ class TestChargingEvents:
 
     def test_external_stop_emits_after_delay(self):
         """External stop: stopped event emitted after 5s delay."""
-        state = self._make_state(ev_active_power_w=0.0, ev_session_energy_wh=8000.0)
+        state = self._make_state(
+            ev_charger_status_enum=ChargerStatus.CHARGING_COMPLETED,
+            ev_session_energy_wh=8000.0,
+        )
         cl = _make_loop(state)
         cl._charging_state = "stopped_pending"
         cl._stopped_at = _time.monotonic() - 6  # 6s ago
@@ -1096,9 +1114,9 @@ class TestChargingEvents:
         assert events[0]["session_energy_wh"] == 8000.0
         assert cl._charging_state == "idle"
 
-    def test_no_external_stop_when_power_positive(self):
-        """No stopped event when charger is still drawing power."""
-        state = self._make_state(ev_active_power_w=5000.0)
+    def test_no_external_stop_when_status_reports_starting(self):
+        """No external stop while charger status indicates start-up."""
+        state = self._make_state(ev_charger_status_enum=ChargerStatus.HANDSHAKING_WITH_VEHICLE)
         cl = _make_loop(state)
         cl._charging_state = "charging"
         cl._last_positive_setpoint = 7000.0
@@ -1106,6 +1124,21 @@ class TestChargingEvents:
         events = self._get_events(cl)
         assert len(events) == 0
         assert cl._charging_state == "charging"
+
+    def test_external_stop_detection_applies_in_eco_mode_too(self):
+        """Status-based external stop handling should be mode-agnostic (Eco included)."""
+        state = self._make_state(
+            charge_mode="Eco",
+            ev_charger_status_enum=ChargerStatus.CHARGING_COMPLETED,
+            ev_session_energy_wh=4200.0,
+        )
+        cl = _make_loop(state)
+        cl._charging_state = "charging"
+        cl._last_positive_setpoint = 5000.0
+        cl._apply_charging_events(5000.0)  # tick 1
+        result = cl._apply_charging_events(5000.0)  # tick 2
+        assert result == 0.0
+        assert cl._charging_state == "stopped_pending"
 
 
 class TestStandbyWriteSuppression:

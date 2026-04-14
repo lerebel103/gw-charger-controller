@@ -1,5 +1,10 @@
 # Goodwe HCA G2 EV Charger Controller
 
+[![GitHub](https://img.shields.io/badge/GitHub-Repository-181717?logo=github)](https://github.com/lerebel103/gw-charger-controller)
+[![Docker Hub](https://img.shields.io/badge/Docker%20Hub-lerebel103%2Fgw--charger--controller-2496ED?logo=docker)](https://hub.docker.com/r/lerebel103/gw-charger-controller)
+[![Release](https://img.shields.io/github/v/release/lerebel103/gw-charger-controller?label=Release)](https://github.com/lerebel103/gw-charger-controller/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/license/mit)
+
 A Docker-based integration that bridges a GW22K-HCA-20 EV charger and a Victron GX device (both over Modbus TCP) with Home Assistant via MQTT discovery.
 
 ## Features

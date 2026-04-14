@@ -33,6 +33,7 @@ _EV_MAX_SOC_MARGIN_PCT = 0.5
 _STOPPING_MIN_DELAY_S = 10.0  # min time between stopping and stopped events
 _STOPPED_DELAY_S = 5.0  # delay after setpoint→0 before emitting stopped event
 _EV_SOC_STALE_S = 300.0  # 5 minutes — treat SOC as unavailable if not updated
+_EXTERNAL_STOP_CONFIRM_TICKS = 2  # require consecutive non-charging status ticks before external stop
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +139,7 @@ class ControlLoop:
         self._stopping_reason: str | None = None
         self._stopped_at: float | None = None  # monotonic time when setpoint went to 0 (pending stopped event)
         self._last_positive_setpoint: float = _MIN_CHARGE_W
+        self._external_stop_ticks: int = 0
         self._start_time: float = _time.monotonic()
         self._eco_day_stopped_at: float | None = None  # monotonic time when eco day last stopped
         self._standby_write_quiet: bool = False  # once standby reached, suppress further EV Modbus writes
@@ -440,6 +442,7 @@ class ControlLoop:
         wants_to_charge = setpoint > 0
 
         if self._charging_state == "idle":
+            self._external_stop_ticks = 0
             if wants_to_charge:
                 self._charging_state = "charging"
                 self._last_positive_setpoint = setpoint
@@ -455,25 +458,29 @@ class ControlLoop:
             return setpoint
 
         if self._charging_state == "charging":
-            # Detect external stop: charger stopped drawing power even though
-            # setpoint is positive (e.g. car full, charger fault, car unplugged
-            # before the controller noticed)
-            ev_power = state.ev_active_power_w
-            if wants_to_charge and ev_power is not None and ev_power <= 0 and self._last_positive_setpoint > 0:
-                # Charger stopped on its own — enter stopped_pending (no grace period needed,
-                # but delay the stopped event so downstream systems don't react prematurely)
-                reason = self._determine_stop_reason()
-                if reason == "unknown":
-                    reason = "external_stop"
-                self._charging_state = "stopped_pending"
-                self._stopped_at = _time.monotonic()
-                self._stopping_reason = reason
-                logger.info(
-                    "Charging event: external stop detected (reason=%s), delaying stopped event %.0f s",
-                    reason,
-                    _STOPPED_DELAY_S,
-                )
-                return 0.0
+            # Detect external stop from charger status (not active power), with
+            # a short confirmation window to ignore one-tick status jitter.
+            if wants_to_charge and self._last_positive_setpoint > 0 and self._is_external_stop_candidate():
+                self._external_stop_ticks += 1
+                if self._external_stop_ticks >= _EXTERNAL_STOP_CONFIRM_TICKS:
+                    # Charger stopped on its own — enter stopped_pending (no
+                    # grace period needed, but delay the stopped event so
+                    # downstream systems don't react prematurely)
+                    reason = self._determine_stop_reason()
+                    if reason == "unknown":
+                        reason = "external_stop"
+                    self._charging_state = "stopped_pending"
+                    self._stopped_at = _time.monotonic()
+                    self._stopping_reason = reason
+                    self._external_stop_ticks = 0
+                    logger.info(
+                        "Charging event: external stop detected (reason=%s), delaying stopped event %.0f s",
+                        reason,
+                        _STOPPED_DELAY_S,
+                    )
+                    return 0.0
+            else:
+                self._external_stop_ticks = 0
 
             if wants_to_charge:
                 self._last_positive_setpoint = setpoint
@@ -483,6 +490,7 @@ class ControlLoop:
             self._charging_state = "stopping"
             self._stopping_at = _time.monotonic()
             self._stopping_reason = reason
+            self._external_stop_ticks = 0
             self._publish_queue.put_nowait(
                 {
                     "type": "charging_event",
@@ -499,6 +507,7 @@ class ControlLoop:
             return self._last_positive_setpoint  # override: keep charging
 
         if self._charging_state == "stopping":
+            self._external_stop_ticks = 0
             if wants_to_charge:
                 # Condition cleared — cancel the stop, resume charging
                 self._charging_state = "charging"
@@ -529,6 +538,7 @@ class ControlLoop:
             return 0.0
 
         if self._charging_state == "stopped_pending":
+            self._external_stop_ticks = 0
             if wants_to_charge:
                 # Resumed before stopped event was emitted — go straight to charging
                 self._charging_state = "charging"
@@ -684,6 +694,23 @@ class ControlLoop:
         if setpoint > 0 or not self._state.ev_connected:
             return False
         return self._charger_is_active_or_starting()
+
+    def _is_external_stop_candidate(self) -> bool:
+        """Return True when charger status indicates charging stopped unexpectedly."""
+        status = self._state.ev_charger_status_enum
+        if status is None or status == ChargerStatus.UNKNOWN:
+            return False
+        if self._charger_is_active_or_starting():
+            return False
+        return status in {
+            ChargerStatus.IDLE_NO_CONNECTOR,
+            ChargerStatus.IDLE_CONNECTOR_PLUGGED,
+            ChargerStatus.CHARGING_COMPLETED,
+            ChargerStatus.ABNORMAL_ALARM,
+            ChargerStatus.MAINTENANCE,
+            ChargerStatus.START_FAILED,
+            ChargerStatus.CHARGING_INTERRUPTED_INSUFFICIENT_PV_BATTERY,
+        }
 
     async def _apply_ev_output(self, setpoint: float, suppress_ev_writes: bool) -> None:
         """Apply EV output actions for this tick while preserving logical setpoint semantics.
