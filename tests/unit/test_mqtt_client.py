@@ -98,3 +98,95 @@ class TestMQTTRuntimeEVSelects:
         ev.write_single_phase_switching.assert_awaited_once_with(SinglePhaseSwitching.ENABLED)
         ev.read_single_phase_switching.assert_awaited_once()
         ev.disconnect.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_runtime_advanced_mode_accepts_numeric_payload(self):
+        state = AppState(charge_mode="Standby")
+        cfg = MagicMock()
+        queue: asyncio.Queue = asyncio.Queue()
+        ev = AsyncMock()
+        ev.connected = True
+        ev.ensure_connected = AsyncMock()
+        ev.disconnect = AsyncMock()
+        ev.write_advanced_charging_mode = AsyncMock(return_value=True)
+        ev.read_advanced_charging_mode = AsyncMock(return_value=AdvancedChargingMode.PV_BATTERY_HYBRID_CHARGING)
+
+        client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue, ev_client=ev)
+        client._client = AsyncMock()
+
+        await client._handle_command("ev_charger/select/advanced_charging_mode/set", "2")
+
+        ev.write_advanced_charging_mode.assert_awaited_once_with(AdvancedChargingMode.PV_BATTERY_HYBRID_CHARGING)
+
+    @pytest.mark.asyncio
+    async def test_runtime_advanced_mode_noop_does_not_connect(self):
+        state = AppState(
+            charge_mode="Standby",
+            ev_advanced_charging_mode_enum=AdvancedChargingMode.PV_CHARGING,
+        )
+        cfg = MagicMock()
+        queue: asyncio.Queue = asyncio.Queue()
+        ev = AsyncMock()
+        ev.connected = True
+        ev.ensure_connected = AsyncMock()
+        ev.disconnect = AsyncMock()
+
+        client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue, ev_client=ev)
+        client._client = AsyncMock()
+
+        await client._handle_command("ev_charger/select/advanced_charging_mode/set", "PV charging")
+
+        ev.ensure_connected.assert_not_awaited()
+        ev.disconnect.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_runtime_advanced_mode_unknown_label_is_rejected(self):
+        state = AppState(charge_mode="Standby")
+        cfg = MagicMock()
+        queue: asyncio.Queue = asyncio.Queue()
+        ev = AsyncMock()
+        ev.connected = True
+        ev.ensure_connected = AsyncMock()
+        ev.disconnect = AsyncMock()
+
+        client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue, ev_client=ev)
+        client._client = AsyncMock()
+
+        await client._handle_command("ev_charger/select/advanced_charging_mode/set", "Unknown")
+
+        ev.ensure_connected.assert_not_awaited()
+        ev.disconnect.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_runtime_advanced_mode_unknown_numeric_is_rejected(self):
+        state = AppState(charge_mode="Standby")
+        cfg = MagicMock()
+        queue: asyncio.Queue = asyncio.Queue()
+        ev = AsyncMock()
+        ev.connected = True
+        ev.ensure_connected = AsyncMock()
+        ev.disconnect = AsyncMock()
+
+        client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue, ev_client=ev)
+        client._client = AsyncMock()
+
+        await client._handle_command("ev_charger/select/advanced_charging_mode/set", "255")
+
+        ev.ensure_connected.assert_not_awaited()
+        ev.disconnect.assert_not_awaited()
+
+
+class TestMQTTChargeModeSelect:
+    @pytest.mark.asyncio
+    async def test_charge_mode_noop_does_not_persist_or_publish(self):
+        state = AppState(charge_mode="Eco")
+        cfg = MagicMock()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue)
+        client._client = AsyncMock()
+
+        await client._handle_command("ev_charger/select/mode/set", "Eco")
+
+        cfg.schedule_persist.assert_not_called()
+        client._client.publish.assert_not_awaited()

@@ -657,12 +657,9 @@ class ControlLoop:
         if ev_power is not None and ev_power > 0:
             return False
 
-        if self._state.ev_connected:
-            self._standby_write_quiet = True
-            logger.info("Standby reached — suppressing all EV Modbus interactions (reads, writes, connections)")
-            return True
-
-        return False
+        self._standby_write_quiet = True
+        logger.info("Standby reached — suppressing all EV Modbus interactions (reads, writes, connections)")
+        return True
 
     def _charger_is_active_or_starting(self) -> bool:
         """Return True when charger status indicates charging or start-up activity."""

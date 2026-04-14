@@ -1189,6 +1189,15 @@ class TestStandbyWriteSuppression:
         cl = _make_loop(state)
         assert cl._should_suppress_ev_writes(5000.0) is False
 
+    def test_suppressed_in_standby_when_ev_disconnected_and_inactive(self):
+        state = self._make_state(
+            ev_connected=False,
+            ev_charger_status_enum=ChargerStatus.IDLE_NO_CONNECTOR,
+            ev_active_power_w=0.0,
+        )
+        cl = _make_loop(state)
+        assert cl._should_suppress_ev_writes(0.0) is True
+
 
 class TestEvOutputActuation:
     def _make_state(self, **overrides):

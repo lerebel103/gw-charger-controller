@@ -420,6 +420,48 @@ _EV_RECONNECT_FIELDS = {"ev_charger_ip", "ev_charger_port"}
 _VICTRON_RECONNECT_FIELDS = {"victron_ip", "victron_port"}
 
 
+def _parse_advanced_mode_payload(payload: str) -> AdvancedChargingMode | None:
+    """Parse advanced charging mode payload from HA label or raw register value string."""
+    mode = AdvancedChargingMode.from_display_name(payload)
+    if mode is not None and mode != AdvancedChargingMode.UNKNOWN:
+        return mode
+    try:
+        raw = int(payload)
+    except (TypeError, ValueError):
+        return None
+    mode = AdvancedChargingMode.from_register(raw)
+    if mode in (None, AdvancedChargingMode.UNKNOWN):
+        return None
+    return mode
+
+
+def _parse_plug_and_charge_payload(payload: str) -> PlugAndChargeAutoStart | None:
+    """Parse plug-and-charge payload from HA label or raw register value string."""
+    mode = PlugAndChargeAutoStart.from_display_name(payload)
+    if mode is not None and mode != PlugAndChargeAutoStart.UNKNOWN:
+        return mode
+    try:
+        raw = int(payload)
+    except (TypeError, ValueError):
+        return None
+    mode = PlugAndChargeAutoStart.from_register(raw)
+    if mode in (None, PlugAndChargeAutoStart.UNKNOWN):
+        return None
+    return mode
+
+
+def _parse_single_phase_payload(payload: str) -> SinglePhaseSwitching | None:
+    """Parse single-phase switching payload from HA switch text or numeric value."""
+    mode = SinglePhaseSwitching.from_switch_payload(payload)
+    if mode is not None:
+        return mode
+    try:
+        raw = int(payload)
+    except (TypeError, ValueError):
+        return None
+    return SinglePhaseSwitching.from_register(raw)
+
+
 class MQTTClient:
     """Manages MQTT connection, HA discovery, state publishing, and commands."""
 
@@ -677,6 +719,8 @@ class MQTTClient:
             if payload not in valid_options:
                 logger.warning("Invalid select value '%s' for %s", payload, attr)
                 return
+            if getattr(self._state, attr) == payload:
+                return
             setattr(self._state, attr, payload)
 
         elif vtype == "hhmm":
@@ -741,23 +785,29 @@ class MQTTClient:
             return
 
         if attr == "ev_advanced_charging_mode":
-            enum_value = AdvancedChargingMode.from_display_name(payload)
+            enum_value = _parse_advanced_mode_payload(payload)
             if enum_value is None:
                 logger.warning("Invalid select value '%s' for %s", payload, attr)
+                return
+            if self._state.ev_advanced_charging_mode_enum == enum_value:
                 return
             writer = self._ev_client.write_advanced_charging_mode
             reader = self._ev_client.read_advanced_charging_mode
         elif attr == "ev_plug_and_charge_auto_start":
-            enum_value = PlugAndChargeAutoStart.from_display_name(payload)
+            enum_value = _parse_plug_and_charge_payload(payload)
             if enum_value is None:
                 logger.warning("Invalid select value '%s' for %s", payload, attr)
+                return
+            if self._state.ev_plug_and_charge_auto_start_enum == enum_value:
                 return
             writer = self._ev_client.write_plug_and_charge_auto_start
             reader = self._ev_client.read_plug_and_charge_auto_start
         elif attr == "ev_single_phase_switching":
-            enum_value = SinglePhaseSwitching.from_switch_payload(payload)
+            enum_value = _parse_single_phase_payload(payload)
             if enum_value is None:
                 logger.warning("Invalid switch value '%s' for %s", payload, attr)
+                return
+            if self._state.ev_single_phase_switching_enum == enum_value:
                 return
             writer = self._ev_client.write_single_phase_switching
             reader = self._ev_client.read_single_phase_switching

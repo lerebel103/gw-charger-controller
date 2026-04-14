@@ -96,7 +96,7 @@ class AdvancedChargingMode(IntEnum):
     @classmethod
     def ha_options(cls) -> list[str]:
         """Return Home Assistant enum options in stable declaration order."""
-        return [mode.display_name for mode in cls]
+        return [mode.display_name for mode in cls if mode != cls.UNKNOWN]
 
     @classmethod
     def from_display_name(cls, value: str) -> AdvancedChargingMode | None:
@@ -136,7 +136,7 @@ class PlugAndChargeAutoStart(IntEnum):
     @classmethod
     def ha_options(cls) -> list[str]:
         """Return Home Assistant enum options in stable declaration order."""
-        return [value.display_name for value in cls]
+        return [value.display_name for value in cls if value != cls.UNKNOWN]
 
     @classmethod
     def from_display_name(cls, value: str) -> PlugAndChargeAutoStart | None:
