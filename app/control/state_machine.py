@@ -4,8 +4,16 @@ from __future__ import annotations
 
 import logging
 import time as _time
-from enum import StrEnum
+from enum import Enum
 from typing import TYPE_CHECKING
+
+try:
+    from enum import StrEnum
+except ImportError:  # pragma: no cover - compatibility for local dev on <3.11
+
+    class StrEnum(str, Enum):
+        """Compatibility fallback for Python versions without enum.StrEnum."""
+
 
 from app.control.constants import _EXTERNAL_STOP_CONFIRM_TICKS, _STOPPED_DELAY_S, _STOPPING_MIN_DELAY_S
 from app.control.time_utils import is_within_discharge_window
@@ -60,8 +68,8 @@ def set_session_state(loop: ControlLoop, state: ChargeSessionState) -> None:
     loop._charging_session_state = state
     loop._charging_state = state.value
     if previous != state:
-        logger.debug(
-            "Charging session transition: %s -> %s (mode=%s reason=%s setpoint=%.0f status=%s)",
+        logger.info(
+            "Charging session state transition: %s -> %s (mode=%s reason=%s setpoint=%.0fW status=%s)",
             previous.value,
             state.value,
             getattr(loop._state, "charge_mode", "unknown"),
@@ -76,8 +84,8 @@ def set_mode_state(loop: ControlLoop, state: ChargeModeState) -> None:
     previous = getattr(loop, "_charge_mode_state", ChargeModeState.IDLE)
     loop._charge_mode_state = state
     if previous != state:
-        logger.debug(
-            "Charging mode-state transition: %s -> %s (charge_mode=%s setpoint=%.0f status=%s)",
+        logger.info(
+            "Charging mode substate transition: %s -> %s (charge_mode=%s setpoint=%.0fW status=%s)",
             previous.value,
             state.value,
             getattr(loop._state, "charge_mode", "unknown"),
