@@ -1,7 +1,5 @@
 """Entry point for the EV charger integration."""
 
-from __future__ import annotations
-
 import argparse
 import asyncio
 import logging

@@ -1,8 +1,35 @@
 """State enums for EV charger integration."""
 
-from __future__ import annotations
+from enum import IntEnum, StrEnum
+from typing import Self
 
-from enum import IntEnum
+
+class ChargeSessionState(StrEnum):
+    """Session lifecycle state of the EV charging session."""
+
+    IDLE = "idle"
+    CHARGING = "charging"
+    STOPPING = "stopping"
+    STOPPED_PENDING = "stopped_pending"
+
+
+class ChargeModeState(StrEnum):
+    """Detailed operational sub-state within the current charge mode."""
+
+    IDLE = "idle"
+    NO_VEHICLE = "no_vehicle"
+    MAX_SOC_BLOCKED = "max_soc_blocked"
+    MANUAL = "manual"
+    STANDBY = "standby"
+    ECO_VICTRON_DOWN = "eco_victron_down"
+    ECO_DAY_SOC_GATE = "eco_day_soc_gate"
+    ECO_DAY_WAITING_FOR_EXPORT = "eco_day_waiting_for_export"
+    ECO_DAY_COOLDOWN = "eco_day_cooldown"
+    ECO_DAY_MINIMUM = "eco_day_minimum"
+    ECO_DAY_RAMPING = "eco_day_ramping"
+    ECO_NIGHT_FLOOR_STOP = "eco_night_floor_stop"
+    ECO_NIGHT_BATTERY = "eco_night_battery"
+    ECO_NIGHT_GRID_FALLBACK = "eco_night_grid_fallback"
 
 
 class ChargerStatus(IntEnum):
@@ -22,7 +49,7 @@ class ChargerStatus(IntEnum):
     UNKNOWN = 255
 
     @classmethod
-    def from_register(cls, value: int | None) -> ChargerStatus | None:
+    def from_register(cls, value: int | None) -> Self | None:
         """Convert register value to ChargerStatus enum."""
         if value is None:
             return None
@@ -65,7 +92,7 @@ class AdvancedChargingMode(IntEnum):
     UNKNOWN = 255
 
     @classmethod
-    def from_register(cls, value: int | None) -> AdvancedChargingMode | None:
+    def from_register(cls, value: int | None) -> Self | None:
         """Convert register value to AdvancedChargingMode enum."""
         if value is None:
             return None
@@ -90,7 +117,7 @@ class AdvancedChargingMode(IntEnum):
         return [mode.display_name for mode in cls if mode != cls.UNKNOWN]
 
     @classmethod
-    def from_display_name(cls, value: str) -> AdvancedChargingMode | None:
+    def from_display_name(cls, value: str) -> Self | None:
         """Map Home Assistant display label to enum value."""
         for mode in cls:
             if mode.display_name == value:
@@ -106,7 +133,7 @@ class PlugAndChargeAutoStart(IntEnum):
     UNKNOWN = 255
 
     @classmethod
-    def from_register(cls, value: int | None) -> PlugAndChargeAutoStart | None:
+    def from_register(cls, value: int | None) -> Self | None:
         """Convert register value to PlugAndChargeAutoStart enum."""
         if value is None:
             return None
@@ -132,7 +159,7 @@ class PlugAndChargeAutoStart(IntEnum):
         return [value.display_name for value in cls if value != cls.UNKNOWN]
 
     @classmethod
-    def from_display_name(cls, value: str) -> PlugAndChargeAutoStart | None:
+    def from_display_name(cls, value: str) -> Self | None:
         """Map Home Assistant display label to enum value."""
         for item in cls:
             if item.display_name == value:
@@ -148,7 +175,7 @@ class SinglePhaseSwitching(IntEnum):
     UNKNOWN = 255
 
     @classmethod
-    def from_register(cls, value: int | None) -> SinglePhaseSwitching | None:
+    def from_register(cls, value: int | None) -> Self | None:
         """Convert register value to SinglePhaseSwitching enum."""
         if value is None:
             return None
@@ -167,7 +194,7 @@ class SinglePhaseSwitching(IntEnum):
         return names.get(self.value, f"Unknown ({self.value})")
 
     @classmethod
-    def from_switch_payload(cls, value: str) -> SinglePhaseSwitching | None:
+    def from_switch_payload(cls, value: str) -> Self | None:
         """Map Home Assistant switch payload to enum value."""
         if value == "ON":
             return cls.ENABLED

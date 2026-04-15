@@ -18,24 +18,82 @@ A Docker-based integration that bridges a GW22K-HCA-20 EV charger and a Victron 
 - **Runtime charger memory controls** from HA for advanced charging mode, plug-and-charge auto start, single-phase switching, and max grid power draw
 - **Diagnostics** for charger communication link bitfield and per-link online states
 
-## Code Organization
+## Getting Started
 
-The codebase is split by domain to keep runtime behavior and integration boundaries clear:
+### Prerequisites
 
-- `app/control/`
-   - Core charging policy and orchestration
-   - Setpoint logic, charging event state machine, and snapshot building
-- `app/modbus/`
-   - Device protocol clients for EV charger and Victron GX
-   - Register reads/writes, reconnect/backoff behavior, and protocol decoding
-- `app/ha/`
-   - Home Assistant MQTT discovery, state publishing, and command handling
-- `app/state/`
-   - Shared enums and dataclasses (`AppState`, `StateSnapshot`, persisted fields)
-- `app/config.py`
-   - YAML load/validate/persist lifecycle
+- **Docker & Docker Compose** (for containerized deployment)
+- **MQTT broker** (Home Assistant's built-in works fine)
+- **GW22K-HCA-20 EV charger** with Modbus TCP enabled
+- **Victron GX** device (Color Control GX, Venus GX, CCGX, or similar) with Modbus TCP
+- All three on the same network with static IPs (or DHCP reservations)
 
-Cross-cutting helpers (for example exponential backoff) stay outside domain packages when used by multiple domains.
+### Quick Start (Docker)
+
+```bash
+# Clone the repository
+git clone https://github.com/lerebel103/gw-charger-controller.git
+cd gw-charger-controller
+
+# Copy and edit the config file
+cp config.yaml.example config.yaml
+# Edit with your MQTT broker and device IPs
+nano config.yaml
+
+# Start the application
+make up
+
+# View logs
+make logs
+
+# Stop
+make down
+```
+
+See **Configuration** below for the required `config.yaml` fields.
+
+### Local Development Setup
+
+```bash
+# Create a Python 3.13+ virtual environment
+python3 -m venv .venv
+source .venv/bin/activate  # or .venv\Scripts\activate on Windows
+
+# Install dependencies
+pip install -e '.[dev]'
+
+# Run tests
+make test
+
+# Run linting
+make lint
+
+# Format code
+make format
+```
+
+## Configuration
+
+Minimal `config.yaml`:
+
+```yaml
+mqtt_host: "192.168.1.10"
+mqtt_port: 1883
+mqtt_username: "ha_user"
+mqtt_password: "secret"
+ev_charger_ip: "192.168.1.20"
+ev_charger_port: 502
+victron_ip: "192.168.1.30"
+victron_port: 502
+```
+
+### Runtime Configuration
+
+All other settings (charge mode, discharge window, floor %, max charge power, min EV SOC, eco mean window, etc.) are configurable from Home Assistant and persisted automatically. Changes take effect immediately without restarting.
+
+### Power Correction
+
+This charger appears to under-read current and active power by about 5.6%. Use `correction_pct` (0.0–10.0%, default 5.6%) to scale those reported values so Home Assistant readings are closer to real measurements. The correction is applied before publishing values to Home Assistant.
 
 ## Charge Modes
 
@@ -73,7 +131,7 @@ Standby includes a narrow user-initiated exception path for runtime charger memo
 - Single Phase Switching (register 10023)
 - Max Grid Power Draw (register 10039)
 
-These standby exceptions are on-demand only and use a short-lived session (connect -> write -> readback -> disconnect).
+These standby exceptions are on-demand only and use a short-lived session (connect → write → readback → disconnect). See [AGENTS.md](AGENTS.md) for implementation details.
 
 ## Runtime EV Controls
 
@@ -98,57 +156,92 @@ Outside standby these values are polled and reflected continuously. In standby t
 
 Additional diagnostics are exposed to Home Assistant:
 
-- **Communication Connection Status** (raw U16, register 10018)
-- Per-bit connectivity binary sensors from register 10018:
-   - Wi-Fi router connected
-   - IoT cloud connected
-   - Inverter online
-   - MID meter online
-   - GW meter online
-   - EMS online
+- **Charger Connection Status** (`number`, raw U16 from register 10018)
+- **Charger Serial Number** (`text`, from register 10040 ASCII)
+- **Per-bit connectivity binary sensors** from register 10018:
+  - Wi-Fi router connected
+  - IoT cloud connected
+  - Inverter online
+  - MID meter online
+  - GW meter online
+  - EMS online
 
-The charger serial number (register 10040, ASCII) is read once at startup/connection and used as Home Assistant device metadata (`device.serial_number`) in MQTT discovery payloads.
-
-## Getting Started
-
-1. Copy and edit the config file:
-   ```bash
-   cp config.yaml.example config.yaml
-   # Edit with your MQTT broker and device IPs
-   ```
-
-2. Run with Docker Compose:
-   ```bash
-   make up
-   ```
-
-## Configuration
-
-Minimal `config.yaml`:
-```yaml
-mqtt_host: "192.168.1.10"
-mqtt_port: 1883
-mqtt_username: "ha_user"
-mqtt_password: "secret"
-ev_charger_ip: "192.168.1.20"
-ev_charger_port: 502
-victron_ip: "192.168.1.30"
-victron_port: 502
-```
-
-All other settings (charge mode, discharge window, floor %, max charge power, min EV SOC, eco mean window, etc.) are configurable from Home Assistant and persisted automatically.
-
-In practice, this charger appears to under-read current and active power by about 5.6%. Use `correction_pct` (0.0-10.0%, default 5.6%) to scale those reported values so Home Assistant readings are closer to real measurements. The correction is applied before publishing values to Home Assistant.
+The charger serial number is read once at startup/connection and used as Home Assistant device metadata (`device.serial_number`) in MQTT discovery payloads.
 
 ## Development
 
+### Make Targets
+
 ```bash
-make test      # Run all tests
-make lint      # Lint with ruff
-make format    # Auto-format with ruff
-make build     # Build Docker image
-make push      # Build & push multi-arch (amd64 + arm64)
+make help       # Show all available targets
+make test       # Run unit and property tests
+make test-cov   # Run tests with coverage report
+make lint       # Lint with ruff
+make format     # Auto-format and fix with ruff
+make build      # Build local Docker image
+make build-multi # Build multi-arch (amd64 + arm64) and push to registry
+make up         # Start with docker-compose (requires config.yaml)
+make down       # Stop docker-compose containers
+make logs       # Tail logs from running container
+make clean      # Remove Docker images and containers
 ```
+
+### Testing
+
+The project uses `pytest` for unit testing with high coverage:
+
+```bash
+# Run all tests
+pytest tests/
+
+# Run with coverage
+pytest tests/ --cov=app --cov-report=term-missing
+
+# Run specific test file
+pytest tests/unit/test_control_loop.py -v
+
+# Run matching a pattern
+pytest tests/ -k "eco" -v
+```
+
+**Test organization:**
+- `tests/unit/` — Unit tests for individual modules
+- `tests/unit/helpers.py` — Shared test fixtures (fake loop, mock clients)
+- No external dependencies required (mocked Modbus and MQTT)
+
+### Code Organization
+
+See [AGENTS.md - Project Architecture](AGENTS.md#project-architecture) for a detailed overview of module responsibilities and data flow.
+
+The codebase is split by domain to keep runtime behavior and integration boundaries clear:
+
+- **`app/control/`** — Core charging policy and orchestration
+  - `loop.py`: Master control loop (reads state, computes setpoint, publishes)
+  - `state_machine.py`: Session and mode state transitions
+  - `mode_strategies.py`: OO charge mode handlers (Eco, Manual, Standby)
+  - `power_utils.py`: Rolling averages, grid fallback, battery limits
+  - `snapshot.py`: State snapshot building for MQTT
+  - `protocols.py`: Structural type hints for all helper functions
+  - `constants.py`: Tunable thresholds (min/max power, cooldowns, etc.)
+
+- **`app/modbus/`** — Device protocol clients
+  - `ev.py`: GW22K-HCA-20 charger client (register I/O, state decoding)
+  - `victron.py`: Victron GX client (system readings, grid meter)
+  - Reconnect/backoff logic, protocol validation, status decoding
+
+- **`app/ha/`** — Home Assistant MQTT integration
+  - `client.py`: MQTT publish/subscribe and command handling
+  - `entities.py`: Entity definitions for MQTT discovery
+  - `parsers.py`: Payload parsing for HA commands
+  - `device.py`: Device and discovery payload construction
+
+- **`app/state/`** — Shared models and types
+  - `models.py`: `AppState` (mutable runtime state) and `StateSnapshot` (immutable outputs)
+  - `enums.py`: Charge modes, session states, charger status codes
+
+- **`app/config.py`** — Configuration lifecycle (load YAML, validate, persist)
+
+Cross-cutting helpers (e.g. exponential backoff, logging) stay outside domain packages.
 
 ## Charging Events
 
@@ -184,7 +277,7 @@ Published when the setpoint is actually set to zero and charging has stopped. Th
 
 When EV SOC is unavailable, `ev_soc_pct` is `null`.
 
-### Stop reasons
+### Stop Reasons
 
 | Reason | Description |
 |---|---|

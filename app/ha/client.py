@@ -1,7 +1,5 @@
 """MQTT client for Home Assistant discovery, state publishing, and command handling."""
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging

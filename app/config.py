@@ -1,7 +1,5 @@
 """Configuration manager for the EV charger integration."""
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import time

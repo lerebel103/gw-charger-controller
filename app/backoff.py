@@ -1,7 +1,5 @@
 """Exponential backoff utility for Modbus and MQTT reconnection."""
 
-from __future__ import annotations
-
 import random
 
 

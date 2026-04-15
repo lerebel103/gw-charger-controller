@@ -1,7 +1,5 @@
 """Home Assistant device metadata helpers."""
 
-from __future__ import annotations
-
 from typing import Any
 
 from app.state import AppState

@@ -1,7 +1,5 @@
 """Control-loop constants."""
 
-from __future__ import annotations
-
 # Charger hardware limits
 _MIN_CHARGE_W = 4400.0
 _MAX_CHARGE_W = 22000.0

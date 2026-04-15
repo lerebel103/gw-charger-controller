@@ -1,7 +1,5 @@
 """Payload parsing helpers for Home Assistant runtime commands."""
 
-from __future__ import annotations
-
 from app.state import AdvancedChargingMode, PlugAndChargeAutoStart, SinglePhaseSwitching
 
 

@@ -15,9 +15,10 @@ help:
 	@echo "  up/start    - Start the application with docker-compose"
 	@echo "  down/stop   - Stop the application with docker-compose"
 	@echo "  logs        - View application logs"
-	@echo "  test        - Run all tests (unit and property)"
+	@echo "  test        - Run all tests"
+	@echo "  test-cov    - Run tests with coverage report"
 	@echo "  lint        - Run linting checks"
-	@echo "  format      - Format code with black and isort"
+	@echo "  format      - Format code with ruff"
 	@echo "  clean       - Clean up Docker images and containers"
 
 # Build Docker image
@@ -33,13 +34,13 @@ build-multi:
 	@echo "Building multi-architecture Docker images..."
 	@echo "Creating buildx builder if not exists..."
 	docker buildx create --name multiarch --use --bootstrap 2>/dev/null || docker buildx use multiarch
-	@echo "Building for linux/amd64 and linux/arm64..."
+	@echo "Building and pushing for linux/amd64 and linux/arm64..."
 	docker buildx build \
 		--platform linux/amd64,linux/arm64 \
 		--tag $(DOCKER_USER)/$(IMAGE_NAME):$(IMAGE_TAG) \
 		--tag $(DOCKER_USER)/$(IMAGE_NAME):$(VERSION) \
 		--build-arg VERSION=$(VERSION) \
-		--load \
+		--push \
 		.
 	@echo "Multi-architecture build complete"
 
@@ -63,7 +64,7 @@ push:
 up start:
 	@echo "Starting GW Charger Controller..."
 	@if [ ! -f config.yaml ]; then \
-		echo "Error: config.yaml not found. Please copy and customize config.yaml from config.example.yaml"; \
+		echo "Error: config.yaml not found. Please copy and customize config.yaml.example to config.yaml"; \
 		exit 1; \
 	fi
 	docker-compose up -d
@@ -82,12 +83,19 @@ logs:
 	@echo "Showing logs for GW Charger Controller (Ctrl+C to exit)..."
 	docker-compose logs -f gw-evcharger-controller
 
-# Run all tests (unit and property)
+# Run all tests
 .PHONY: test
 test:
 	@echo "Running all tests..."
 	python -m pytest tests/ -v
 	@echo "All tests completed."
+
+# Run tests with coverage
+.PHONY: test-cov
+test-cov:
+	@echo "Running tests with coverage..."
+	python -m pytest tests/ -v --cov=app --cov-report=term-missing
+	@echo "Coverage report complete."
 
 # Run linting checks
 .PHONY: lint

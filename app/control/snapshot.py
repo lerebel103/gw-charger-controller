@@ -1,18 +1,14 @@
 """Snapshot-building helpers for the control loop."""
 
-from __future__ import annotations
-
 import time as _time
 from datetime import datetime
-from typing import TYPE_CHECKING
 
+from app.control.power_utils import get_ev_soc
+from app.control.protocols import SnapshotLoopProtocol
 from app.state import StateSnapshot
 
-if TYPE_CHECKING:
-    from app.control.loop import ControlLoop
 
-
-def build_snapshot(loop: ControlLoop) -> StateSnapshot:
+def build_snapshot(loop: SnapshotLoopProtocol) -> StateSnapshot:
     """Build an immutable snapshot for MQTT publication."""
     return StateSnapshot(
         ev_connected=loop._state.ev_connected,
@@ -50,7 +46,7 @@ def build_snapshot(loop: ControlLoop) -> StateSnapshot:
         ev_current_c=loop._state.ev_current_c,
         ev_completion_time_h=loop._state.ev_completion_time_h,
         ev_total_energy_wh=loop._state.ev_total_energy_wh,
-        ev_soc_pct=loop._get_ev_soc(),
+        ev_soc_pct=get_ev_soc(loop),
         l1_voltage_drop_pct=loop._state.l1_voltage_drop_pct,
         l2_voltage_drop_pct=loop._state.l2_voltage_drop_pct,
         l3_voltage_drop_pct=loop._state.l3_voltage_drop_pct,

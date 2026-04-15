@@ -1,7 +1,6 @@
 """EV charger (GW22K-HCA-20) Modbus TCP client."""
 
-from __future__ import annotations
-
+import inspect
 import logging
 
 from pymodbus.client import AsyncModbusTcpClient
@@ -406,7 +405,9 @@ class EVChargerModbusClient:
 
     async def _close(self) -> None:
         if self._client is not None:
-            self._client.close()
+            maybe_awaitable = self._client.close()
+            if inspect.isawaitable(maybe_awaitable):
+                await maybe_awaitable
             self._client = None
         self._serial_read_attempted = False
 

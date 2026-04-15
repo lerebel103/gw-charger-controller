@@ -1,0 +1,267 @@
+"""Charging mode strategy objects and setpoint dispatch."""
+
+import logging
+import time as _time
+from abc import ABC, abstractmethod
+
+from app.control.constants import (
+    _ECO_DAY_COOLDOWN_S,
+    _ECO_DAY_RAMP_STEP_W,
+    _EV_MAX_SOC_MARGIN_PCT,
+    _GRID_EXPORT_START_THRESHOLD_W,
+    _MAX_CHARGE_W,
+    _MIN_CHARGE_W,
+    _RAMP_DEADBAND_W,
+)
+from app.control.power_utils import (
+    clamp,
+    compute_grid_fallback_setpoint,
+    get_ev_soc,
+    limit_battery_discharge,
+    mean_battery_power,
+    mean_grid_power,
+)
+from app.control.protocols import ModeLoopProtocol
+from app.control.time_utils import is_within_discharge_window
+from app.state import ChargeModeState
+
+logger = logging.getLogger(__name__)
+
+
+class ModeSetpointHandler(ABC):
+    """Encapsulated setpoint strategy for one top-level charging mode state."""
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Diagnostic name of this mode handler."""
+
+    @abstractmethod
+    def compute(self, loop: ModeLoopProtocol) -> float:
+        """Return the setpoint to apply for this mode handler."""
+
+
+class NoVehicleModeHandler(ModeSetpointHandler):
+    @property
+    def name(self) -> str:
+        return "no_vehicle"
+
+    def compute(self, loop: ModeLoopProtocol) -> float:
+        loop._state_machine.set_mode_state(ChargeModeState.NO_VEHICLE)
+        return 0.0
+
+
+class MaxSocBlockedModeHandler(ModeSetpointHandler):
+    @property
+    def name(self) -> str:
+        return "max_soc_blocked"
+
+    def compute(self, loop: ModeLoopProtocol) -> float:
+        loop._state_machine.set_mode_state(ChargeModeState.MAX_SOC_BLOCKED)
+        return 0.0
+
+
+class ManualModeHandler(ModeSetpointHandler):
+    @property
+    def name(self) -> str:
+        return "manual"
+
+    def compute(self, loop: ModeLoopProtocol) -> float:
+        loop._state_machine.set_mode_state(ChargeModeState.MANUAL)
+        return clamp(loop._state.manual_power_w, _MIN_CHARGE_W, _MAX_CHARGE_W)
+
+
+class StandbyModeHandler(ModeSetpointHandler):
+    @property
+    def name(self) -> str:
+        return "standby"
+
+    def compute(self, loop: ModeLoopProtocol) -> float:
+        loop._eco_charging = False
+        loop._eco_day_setpoint_w = _MIN_CHARGE_W
+        loop._state_machine.set_mode_state(ChargeModeState.STANDBY)
+        return 0.0
+
+
+class EcoVictronDownModeHandler(ModeSetpointHandler):
+    @property
+    def name(self) -> str:
+        return "eco_victron_down"
+
+    def compute(self, loop: ModeLoopProtocol) -> float:
+        logger.warning("Eco mode: Victron comms down - pausing EV charging")
+        loop._eco_charging = False
+        loop._state_machine.set_mode_state(ChargeModeState.ECO_VICTRON_DOWN)
+        return 0.0
+
+
+class EcoNightModeHandler(ModeSetpointHandler):
+    @property
+    def name(self) -> str:
+        return "eco_night"
+
+    def compute(self, loop: ModeLoopProtocol) -> float:
+        state = loop._state
+        ev_soc = get_ev_soc(loop)
+
+        battery_flat = (
+            state.solar_battery_power_w is not None
+            and state.solar_battery_power_w > -100.0
+            and state.solar_battery_soc_pct is not None
+            and state.solar_battery_soc_pct <= state.solar_battery_discharge_floor_pct
+        )
+
+        if battery_flat:
+            ev_needs_charge = ev_soc is not None and ev_soc < state.ev_min_soc_pct
+            if not ev_needs_charge:
+                loop._state_machine.set_mode_state(ChargeModeState.ECO_NIGHT_FLOOR_STOP)
+                return 0.0
+            loop._state_machine.set_mode_state(ChargeModeState.ECO_NIGHT_GRID_FALLBACK)
+            return compute_grid_fallback_setpoint(loop, ev_soc)
+
+        at_floor = (
+            state.solar_battery_soc_pct is not None
+            and state.solar_battery_soc_pct <= state.solar_battery_discharge_floor_pct
+        )
+        if at_floor:
+            ev_needs_charge = ev_soc is not None and ev_soc < state.ev_min_soc_pct
+            if not ev_needs_charge:
+                loop._state_machine.set_mode_state(ChargeModeState.ECO_NIGHT_FLOOR_STOP)
+                return 0.0
+
+        loop._state_machine.set_mode_state(ChargeModeState.ECO_NIGHT_BATTERY)
+        setpoint = clamp(state.solar_battery_max_ev_charge_power_w, _MIN_CHARGE_W, _MAX_CHARGE_W)
+        return limit_battery_discharge(loop, setpoint, state.solar_battery_max_discharge_w)
+
+
+class EcoDayModeHandler(ModeSetpointHandler):
+    @property
+    def name(self) -> str:
+        return "eco_day"
+
+    def compute(self, loop: ModeLoopProtocol) -> float:
+        state = loop._state
+
+        if state.solar_battery_soc_pct is not None and state.solar_battery_soc_pct < state.eco_day_min_battery_soc_pct:
+            if loop._eco_charging:
+                logger.info(
+                    "Eco day: pausing charge (home battery SOC %.0f%% < threshold %.0f%%)",
+                    state.solar_battery_soc_pct,
+                    state.eco_day_min_battery_soc_pct,
+                )
+                loop._eco_charging = False
+            loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_SOC_GATE)
+            return 0.0
+
+        battery_full = state.solar_battery_soc_pct is not None and state.solar_battery_soc_pct >= 98.0
+        current_mean_grid = mean_grid_power(loop)
+        current_mean_battery = mean_battery_power(loop)
+
+        if not loop._eco_charging and loop._eco_day_stopped_at is not None:
+            elapsed = _time.monotonic() - loop._eco_day_stopped_at
+            if elapsed < _ECO_DAY_COOLDOWN_S:
+                loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_COOLDOWN)
+                return 0.0
+
+        if not loop._eco_charging:
+            if current_mean_grid is not None and current_mean_grid <= _GRID_EXPORT_START_THRESHOLD_W:
+                loop._eco_charging = True
+                loop._eco_day_setpoint_w = _MIN_CHARGE_W
+                loop._eco_day_stopped_at = None
+                logger.info(
+                    "Eco day: starting charge at %.0f W (mean grid=%.0f W)",
+                    loop._eco_day_setpoint_w,
+                    current_mean_grid,
+                )
+            else:
+                loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_WAITING_FOR_EXPORT)
+                return 0.0
+
+        if current_mean_battery is not None and current_mean_battery < state.solar_battery_day_power_limit_w:
+            loop._eco_charging = False
+            loop._eco_day_stopped_at = _time.monotonic()
+            logger.info(
+                "Eco day: stopping charge (mean battery=%.0f W, limit=%.0f W), cooldown %.0f s",
+                current_mean_battery,
+                state.solar_battery_day_power_limit_w,
+                _ECO_DAY_COOLDOWN_S,
+            )
+            loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_COOLDOWN)
+            return 0.0
+
+        if not battery_full:
+            loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_MINIMUM)
+            return _MIN_CHARGE_W
+
+        ev_power = state.ev_active_power_w
+        if ev_power is None or ev_power <= 0:
+            loop._eco_day_setpoint_w = _MIN_CHARGE_W
+            loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_MINIMUM)
+            return _MIN_CHARGE_W
+
+        battery_power = state.solar_battery_power_w
+        if battery_power is not None and battery_power < -_RAMP_DEADBAND_W:
+            loop._eco_day_setpoint_w -= _ECO_DAY_RAMP_STEP_W
+        else:
+            loop._eco_day_setpoint_w += _ECO_DAY_RAMP_STEP_W
+
+        loop._eco_day_setpoint_w = clamp(loop._eco_day_setpoint_w, _MIN_CHARGE_W, _MAX_CHARGE_W)
+        loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_RAMPING)
+        return loop._eco_day_setpoint_w
+
+
+_NO_VEHICLE_HANDLER = NoVehicleModeHandler()
+_MAX_SOC_BLOCKED_HANDLER = MaxSocBlockedModeHandler()
+_MANUAL_HANDLER = ManualModeHandler()
+_STANDBY_HANDLER = StandbyModeHandler()
+_ECO_VICTRON_DOWN_HANDLER = EcoVictronDownModeHandler()
+_ECO_NIGHT_HANDLER = EcoNightModeHandler()
+_ECO_DAY_HANDLER = EcoDayModeHandler()
+
+
+def resolve_mode_handler(loop: ModeLoopProtocol) -> ModeSetpointHandler:
+    """Resolve the top-level mode strategy for the current loop snapshot."""
+    if not loop._state.ev_connected:
+        return _NO_VEHICLE_HANDLER
+
+    ev_soc = get_ev_soc(loop)
+    if ev_soc is not None and ev_soc >= (loop._state.ev_max_soc_pct - _EV_MAX_SOC_MARGIN_PCT):
+        return _MAX_SOC_BLOCKED_HANDLER
+
+    mode = loop._state.charge_mode
+    if mode == "Manual":
+        return _MANUAL_HANDLER
+    if mode == "Standby":
+        return _STANDBY_HANDLER
+
+    if not loop._victron_client.connected:
+        return _ECO_VICTRON_DOWN_HANDLER
+
+    if is_within_discharge_window(loop._state):
+        return _ECO_NIGHT_HANDLER
+    return _ECO_DAY_HANDLER
+
+
+def compute_setpoint(loop: ModeLoopProtocol) -> float:
+    """Compute the current charge-power setpoint."""
+    return resolve_mode_handler(loop).compute(loop)
+
+
+def setpoint_manual(loop: ModeLoopProtocol) -> float:
+    """Manual: charge at a fixed user-configured power."""
+    return _MANUAL_HANDLER.compute(loop)
+
+
+def setpoint_standby(loop: ModeLoopProtocol) -> float:
+    """Standby: no charging."""
+    return _STANDBY_HANDLER.compute(loop)
+
+
+def setpoint_eco_night(loop: ModeLoopProtocol) -> float:
+    """Eco inside discharge window: draw from solar battery at a fixed rate."""
+    return _ECO_NIGHT_HANDLER.compute(loop)
+
+
+def setpoint_eco_day(loop: ModeLoopProtocol) -> float:
+    """Eco outside discharge window: charge from excess solar."""
+    return _ECO_DAY_HANDLER.compute(loop)

@@ -1,7 +1,6 @@
 """Victron GX Modbus TCP client for reading grid, battery, and voltage data."""
 
-from __future__ import annotations
-
+import inspect
 import logging
 import struct
 
@@ -116,7 +115,9 @@ class VictronModbusClient:
 
     async def _close(self) -> None:
         if self._client is not None:
-            self._client.close()
+            maybe_awaitable = self._client.close()
+            if inspect.isawaitable(maybe_awaitable):
+                await maybe_awaitable
             self._client = None
 
     async def _read_registers(self) -> None:

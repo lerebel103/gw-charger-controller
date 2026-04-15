@@ -1,7 +1,5 @@
 """Constants and command metadata for Home Assistant MQTT integration."""
 
-from __future__ import annotations
-
 from app.state import AdvancedChargingMode
 
 PREFIX = "ev_charger"
