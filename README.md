@@ -18,41 +18,53 @@ A Docker-based integration that bridges a GW22K-HCA-20 EV charger and a Victron 
 - **Runtime charger memory controls** from HA for advanced charging mode, plug-and-charge auto start, single-phase switching, and max grid power draw
 - **Diagnostics** for charger communication link bitfield and per-link online states
 
-## Getting Started
+## Installation and Configuration (Docker First)
+
+Docker Compose is the recommended and first-class way to run this project.
 
 ### Prerequisites
 
-- **Docker & Docker Compose** (for containerized deployment)
-- **MQTT broker** (Home Assistant's built-in works fine)
+- **Docker & Docker Compose**
+- **MQTT broker** (Home Assistant's built-in broker works fine)
 - **GW22K-HCA-20 EV charger** with Modbus TCP enabled
 - **Victron GX** device (Color Control GX, Venus GX, CCGX, or similar) with Modbus TCP
 - All three on the same network with static IPs (or DHCP reservations)
 
-### Quick Start (Docker)
+### Recommended Setup with Docker Compose
+
+The repository already includes a ready-to-use compose example in `docker-compose.yml`.
 
 ```bash
 # Clone the repository
 git clone https://github.com/lerebel103/gw-charger-controller.git
 cd gw-charger-controller
 
-# Copy and edit the config file
+# Create your runtime config
 cp config.yaml.example config.yaml
 # Edit with your MQTT broker and device IPs
 nano config.yaml
 
-# Start the application
-make up
+# Start using the included compose file
+docker compose up -d
 
-# View logs
-make logs
+# Follow logs
+docker compose logs -f gw-evcharger-controller
 
 # Stop
+docker compose down
+```
+
+You can also use the convenience targets:
+
+```bash
+make up
+make logs
 make down
 ```
 
-See **Configuration** below for the required `config.yaml` fields.
+See **Configuration** below for required `config.yaml` fields.
 
-### Local Development Setup
+### Alternative: Local Development Setup
 
 ```bash
 # Create a Python 3.13+ virtual environment
