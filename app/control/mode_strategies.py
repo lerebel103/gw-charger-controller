@@ -153,7 +153,7 @@ class EcoDayModeHandler(ModeSetpointHandler):
             loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_SOC_GATE)
             return 0.0
 
-        battery_full = state.solar_battery_soc_pct is not None and state.solar_battery_soc_pct >= 98.0
+        battery_full = state.solar_battery_soc_pct is not None and state.solar_battery_soc_pct >= 96.0
         current_mean_grid = mean_grid_power(loop)
         current_mean_battery = mean_battery_power(loop)
 
@@ -225,7 +225,8 @@ def resolve_mode_handler(loop: ModeLoopProtocol) -> ModeSetpointHandler:
         return _NO_VEHICLE_HANDLER
 
     ev_soc = get_ev_soc(loop)
-    if ev_soc is not None and ev_soc >= (loop._state.ev_max_soc_pct - _EV_MAX_SOC_MARGIN_PCT):
+    margin = _EV_MAX_SOC_MARGIN_PCT if loop._state.ev_max_soc_pct >= 100.0 else 0.0
+    if ev_soc is not None and ev_soc >= (loop._state.ev_max_soc_pct - margin):
         return _MAX_SOC_BLOCKED_HANDLER
 
     mode = loop._state.charge_mode

@@ -1021,11 +1021,28 @@ class TestChargingEvents:
         assert len(events) == 0
 
     def test_max_soc_reason_detected(self):
-        state = self._make_state(ev_soc_pct=79.9, ev_max_soc_pct=80.0)
+        # Exact target reached (no margin applied for non-100% targets)
+        state = self._make_state(ev_soc_pct=80.0, ev_max_soc_pct=80.0)
         state.ev_soc_pct_updated_at = _time.monotonic()
         cl = make_control_loop(state)
         reason = cl._state_machine.determine_stop_reason()
         assert reason == "max_soc_reached"
+
+    def test_max_soc_reason_detected_100pct_with_margin(self):
+        # At 100% target, 0.5% margin applies so 99.5% triggers max_soc_reached
+        state = self._make_state(ev_soc_pct=99.5, ev_max_soc_pct=100.0)
+        state.ev_soc_pct_updated_at = _time.monotonic()
+        cl = make_control_loop(state)
+        reason = cl._state_machine.determine_stop_reason()
+        assert reason == "max_soc_reached"
+
+    def test_max_soc_reason_not_triggered_below_margin(self):
+        # For non-100% targets, no margin: 79.9% should NOT trigger max_soc_reached at 80% target
+        state = self._make_state(ev_soc_pct=79.9, ev_max_soc_pct=80.0)
+        state.ev_soc_pct_updated_at = _time.monotonic()
+        cl = make_control_loop(state)
+        reason = cl._state_machine.determine_stop_reason()
+        assert reason != "max_soc_reached"
 
     def test_vehicle_disconnected_reason(self):
         state = self._make_state(ev_connected=False)

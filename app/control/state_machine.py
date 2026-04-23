@@ -263,7 +263,8 @@ class ChargingStateMachine:
         """Determine why charging is stopping based on current loop state."""
         state = self.loop._state
         ev_soc = get_ev_soc(self.loop)
-        if ev_soc is not None and ev_soc >= (state.ev_max_soc_pct - _EV_MAX_SOC_MARGIN_PCT):
+        margin = _EV_MAX_SOC_MARGIN_PCT if state.ev_max_soc_pct >= 100.0 else 0.0
+        if ev_soc is not None and ev_soc >= (state.ev_max_soc_pct - margin):
             return "max_soc_reached"
         if not state.ev_connected:
             return "vehicle_disconnected"
