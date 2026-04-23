@@ -7,7 +7,7 @@ WORKDIR /app
 RUN groupadd -r lerebel103 && useradd -r -g lerebel103 lerebel103
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
