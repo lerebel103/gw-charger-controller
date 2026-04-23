@@ -223,7 +223,7 @@ class ChargingStateMachine:
         previous = getattr(self.loop, "_charge_mode_state", ChargeModeState.IDLE)
         self.loop._charge_mode_state = state
         if previous != state:
-            logger.info(
+            logger.debug(
                 "Charging mode substate transition: %s -> %s (charge_mode=%s setpoint=%.0fW status=%s)",
                 previous.value,
                 state.value,
