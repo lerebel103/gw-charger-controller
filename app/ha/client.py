@@ -269,6 +269,7 @@ class MQTTClient:
             (f"{_PREFIX}/number/eco_mean_window/state", str(s.eco_mean_window_minutes)),
             (f"{_PREFIX}/number/solar_batt_day_limit/state", str(s.solar_battery_day_power_limit_w)),
             (f"{_PREFIX}/number/eco_day_min_batt_soc/state", str(s.eco_day_min_battery_soc_pct)),
+            (f"{_PREFIX}/number/eco_day_ramp_step/state", str(s.eco_day_ramp_step_w)),
             (f"{_PREFIX}/number/measurement_correction/state", str(s.correction_pct)),
             (f"{_PREFIX}/text/solar_battery_discharge_start/state", s.solar_battery_discharge_start),
             (f"{_PREFIX}/text/solar_battery_discharge_end/state", s.solar_battery_discharge_end),

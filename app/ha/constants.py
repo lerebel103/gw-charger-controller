@@ -32,6 +32,7 @@ COMMAND_MAP: dict[str, tuple[str, str]] = {
     f"{PREFIX}/number/eco_mean_window/set": ("eco_mean_window_minutes", "int"),
     f"{PREFIX}/number/solar_batt_day_limit/set": ("solar_battery_day_power_limit_w", "float"),
     f"{PREFIX}/number/eco_day_min_batt_soc/set": ("eco_day_min_battery_soc_pct", "float"),
+    f"{PREFIX}/number/eco_day_ramp_step/set": ("eco_day_ramp_step_w", "float"),
     f"{PREFIX}/number/measurement_correction/set": ("correction_pct", "float"),
     f"{PREFIX}/text/solar_battery_discharge_start/set": ("solar_battery_discharge_start", "hhmm"),
     f"{PREFIX}/text/solar_battery_discharge_end/set": ("solar_battery_discharge_end", "hhmm"),
@@ -54,6 +55,7 @@ NUMBER_RANGES: dict[str, tuple[float, float]] = {
     "eco_mean_window_minutes": (1, 10),
     "solar_battery_day_power_limit_w": (-10000, 0),
     "eco_day_min_battery_soc_pct": (0, 100),
+    "eco_day_ramp_step_w": (10, 500),
     "correction_pct": (0, 10),
 }
 

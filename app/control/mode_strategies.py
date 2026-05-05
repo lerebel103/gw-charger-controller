@@ -6,7 +6,6 @@ from abc import ABC, abstractmethod
 
 from app.control.constants import (
     _ECO_DAY_COOLDOWN_S,
-    _ECO_DAY_RAMP_STEP_W,
     _EV_MAX_SOC_MARGIN_PCT,
     _GRID_EXPORT_START_THRESHOLD_W,
     _MAX_CHARGE_W,
@@ -201,9 +200,9 @@ class EcoDayModeHandler(ModeSetpointHandler):
 
         battery_power = state.solar_battery_power_w
         if battery_power is not None and battery_power < -_RAMP_DEADBAND_W:
-            loop._eco_day_setpoint_w -= _ECO_DAY_RAMP_STEP_W
+            loop._eco_day_setpoint_w -= state.eco_day_ramp_step_w
         else:
-            loop._eco_day_setpoint_w += _ECO_DAY_RAMP_STEP_W
+            loop._eco_day_setpoint_w += state.eco_day_ramp_step_w
 
         loop._eco_day_setpoint_w = clamp(loop._eco_day_setpoint_w, _MIN_CHARGE_W, _MAX_CHARGE_W)
         loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_RAMPING)

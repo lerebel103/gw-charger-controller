@@ -191,6 +191,7 @@ ENTITIES: list[dict[str, Any]] = [
     _number("ev_charger_eco_mean_window", "Eco Mean Window", "eco_mean_window", 1, 10, 1, "min"),
     _number("ev_charger_solar_batt_day_limit", "Solar Batt Pwr Lim (day)", "solar_batt_day_limit", -10000, 0, 100, "W"),
     _number("ev_charger_eco_day_min_batt_soc", "Eco Day Min Batt SOC", "eco_day_min_batt_soc", 0, 100, 1, "%"),
+    _number("ev_charger_eco_day_ramp_step", "Eco Day Ramp Step", "eco_day_ramp_step", 10, 500, 10, "W"),
     _number(
         "ev_charger_measurement_correction",
         "EV Measurement Correction",
