@@ -27,11 +27,19 @@ class TestStopReason:
         assert machine.determine_stop_reason() == "standby"
 
     def test_eco_day_battery_reason(self):
+        # Use a narrow discharge window guaranteed to not contain the current time
+        # by placing it exactly 12 hours from now (±30 min)
+        from datetime import datetime, timedelta
+
+        now = datetime.now()
+        window_start = (now + timedelta(hours=12)).strftime("%H:%M")
+        window_end = (now + timedelta(hours=13)).strftime("%H:%M")
+
         state = AppState(
             ev_connected=True,
             charge_mode="Eco",
-            solar_battery_discharge_start="23:00",
-            solar_battery_discharge_end="06:00",
+            solar_battery_discharge_start=window_start,
+            solar_battery_discharge_end=window_end,
             solar_battery_soc_pct=95.0,
             solar_battery_day_power_limit_w=-1500.0,
         )
