@@ -269,6 +269,8 @@ class MQTTClient:
             (f"{_PREFIX}/number/eco_mean_window/state", str(s.eco_mean_window_minutes)),
             (f"{_PREFIX}/number/solar_batt_day_limit/state", str(s.solar_battery_day_power_limit_w)),
             (f"{_PREFIX}/number/eco_day_min_batt_soc/state", str(s.eco_day_min_battery_soc_pct)),
+            (f"{_PREFIX}/number/eco_day_battery_full/state", str(s.eco_day_battery_full_pct)),
+            (f"{_PREFIX}/number/eco_day_battery_full_exit/state", str(s.eco_day_battery_full_exit_pct)),
             (f"{_PREFIX}/number/eco_day_ramp_step/state", str(s.eco_day_ramp_step_w)),
             (f"{_PREFIX}/number/measurement_correction/state", str(s.correction_pct)),
             (f"{_PREFIX}/text/solar_battery_discharge_start/state", s.solar_battery_discharge_start),
@@ -319,7 +321,7 @@ class MQTTClient:
         if topic_str == _VEHICLE_SOC_TOPIC:
             try:
                 soc = float(payload)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 logger.warning("Invalid vehicle SOC value: %s", payload)
                 return
             if not (0 <= soc <= 100):
@@ -345,6 +347,7 @@ class MQTTClient:
             valid_options = _SELECT_OPTIONS.get(attr, [])
             if payload not in valid_options:
                 logger.warning("Invalid select value '%s' for %s", payload, attr)
+                await self._echo_current_value(topic_str, attr)
                 return
             if getattr(self._state, attr) == payload:
                 return
@@ -353,30 +356,35 @@ class MQTTClient:
         elif vtype == "hhmm":
             if not validate_hhmm(payload):
                 logger.error("Invalid HH:MM value '%s' for %s, retaining previous value", payload, attr)
+                await self._echo_current_value(topic_str, attr)
                 return
             setattr(self._state, attr, normalise_hhmm(payload))
 
         elif vtype == "float":
             try:
                 val = float(payload)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 logger.warning("Invalid float value '%s' for %s", payload, attr)
+                await self._echo_current_value(topic_str, attr)
                 return
             rng = _NUMBER_RANGES.get(attr)
             if rng and not (rng[0] <= val <= rng[1]):
                 logger.warning("Value %s out of range %s for %s", val, rng, attr)
+                await self._echo_current_value(topic_str, attr)
                 return
             setattr(self._state, attr, val)
 
         elif vtype == "int":
             try:
                 val_i = int(float(payload))
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 logger.warning("Invalid int value '%s' for %s", payload, attr)
+                await self._echo_current_value(topic_str, attr)
                 return
             rng = _NUMBER_RANGES.get(attr)
             if rng and not (rng[0] <= val_i <= rng[1]):
                 logger.warning("Value %s out of range %s for %s", val_i, rng, attr)
+                await self._echo_current_value(topic_str, attr)
                 return
             setattr(self._state, attr, val_i)
 
@@ -404,6 +412,13 @@ class MQTTClient:
         if attr in _VICTRON_RECONNECT_FIELDS and self._victron_client is not None:
             logger.info("Victron GX connection config changed (%s), triggering reconnect", attr)
             asyncio.ensure_future(self._victron_client.reconnect())
+
+    async def _echo_current_value(self, topic_str: str, attr: str) -> None:
+        """Republish the current state value to HA so the UI reverts on rejected commands."""
+        state_topic = _CMD_TO_STATE_TOPIC.get(topic_str)
+        if state_topic and self._client is not None:
+            current_value = str(getattr(self._state, attr))
+            await self._client.publish(state_topic, current_value, retain=True)
 
     async def _handle_runtime_ev_select(self, attr: str, payload: str, topic: str) -> None:
         """Handle user-driven runtime EV select commands, including standby exception path."""

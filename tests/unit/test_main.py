@@ -74,7 +74,7 @@ def test_main_parses_config_flag(monkeypatch):
     with (
         patch("app.main.setup_logging"),
         patch("app.main._async_main", side_effect=fake_async_main),
-        patch("asyncio.run", side_effect=lambda coro: asyncio.get_event_loop().run_until_complete(coro)),
+        patch("asyncio.run", side_effect=lambda coro: asyncio.new_event_loop().run_until_complete(coro)),
     ):
         main()
 
@@ -93,7 +93,7 @@ def test_main_default_config(monkeypatch):
     with (
         patch("app.main.setup_logging"),
         patch("app.main._async_main", side_effect=fake_async_main),
-        patch("asyncio.run", side_effect=lambda coro: asyncio.get_event_loop().run_until_complete(coro)),
+        patch("asyncio.run", side_effect=lambda coro: asyncio.new_event_loop().run_until_complete(coro)),
     ):
         main()
 

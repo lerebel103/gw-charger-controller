@@ -17,7 +17,7 @@ def parse_advanced_mode_payload(payload: str) -> AdvancedChargingMode | None:
         return mode
     try:
         raw = int(payload_clean)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     mode = AdvancedChargingMode.from_register(raw)
     if mode in (None, AdvancedChargingMode.UNKNOWN):
@@ -44,7 +44,7 @@ def parse_plug_and_charge_payload(payload: str) -> PlugAndChargeAutoStart | None
         return mode
     try:
         raw = int(payload_clean)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     mode = PlugAndChargeAutoStart.from_register(raw)
     if mode in (None, PlugAndChargeAutoStart.UNKNOWN):
@@ -60,7 +60,7 @@ def parse_single_phase_payload(payload: str) -> SinglePhaseSwitching | None:
         return mode
     try:
         raw = int(payload_clean)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     return SinglePhaseSwitching.from_register(raw)
 
@@ -69,7 +69,7 @@ def parse_max_grid_power_draw_payload(payload: str) -> float | None:
     """Parse max grid power draw payload in watts (physical range 4200-22000 W)."""
     try:
         value = float(str(payload).strip())
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     if not (4200.0 <= value <= 22000.0):
         return None
