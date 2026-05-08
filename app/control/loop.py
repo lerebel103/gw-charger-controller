@@ -42,6 +42,7 @@ class ControlLoop:
         self._prev_ev_connected: bool | None = None
         self._eco_charging: bool = False
         self._eco_day_setpoint_w: float = _MIN_CHARGE_W
+        self._eco_day_battery_full: bool = False
         self._charging_session_state: ChargeSessionState = ChargeSessionState.IDLE
         self._charge_mode_state: ChargeModeState = ChargeModeState.IDLE
         self._stopping_at: float | None = None

@@ -27,7 +27,7 @@ class SessionStateHandler(ABC):
         """Associated enum value for this handler."""
 
     @abstractmethod
-    def handle(self, machine: "ChargingStateMachine", setpoint: float) -> float:
+    def handle(self, machine: ChargingStateMachine, setpoint: float) -> float:
         """Apply state behavior and return the resulting setpoint."""
 
 
@@ -36,7 +36,7 @@ class IdleSessionStateHandler(SessionStateHandler):
     def state(self) -> ChargeSessionState:
         return ChargeSessionState.IDLE
 
-    def handle(self, machine: "ChargingStateMachine", setpoint: float) -> float:
+    def handle(self, machine: ChargingStateMachine, setpoint: float) -> float:
         loop = machine.loop
         loop._external_stop_ticks = 0
         if setpoint <= 0:
@@ -52,7 +52,7 @@ class ChargingSessionStateHandler(SessionStateHandler):
     def state(self) -> ChargeSessionState:
         return ChargeSessionState.CHARGING
 
-    def handle(self, machine: "ChargingStateMachine", setpoint: float) -> float:
+    def handle(self, machine: ChargingStateMachine, setpoint: float) -> float:
         loop = machine.loop
         state = loop._state
         wants_to_charge = setpoint > 0
@@ -128,7 +128,7 @@ class StoppingSessionStateHandler(SessionStateHandler):
     def state(self) -> ChargeSessionState:
         return ChargeSessionState.STOPPING
 
-    def handle(self, machine: "ChargingStateMachine", setpoint: float) -> float:
+    def handle(self, machine: ChargingStateMachine, setpoint: float) -> float:
         loop = machine.loop
         loop._external_stop_ticks = 0
         if setpoint > 0:
@@ -152,7 +152,7 @@ class StoppedPendingSessionStateHandler(SessionStateHandler):
     def state(self) -> ChargeSessionState:
         return ChargeSessionState.STOPPED_PENDING
 
-    def handle(self, machine: "ChargingStateMachine", setpoint: float) -> float:
+    def handle(self, machine: ChargingStateMachine, setpoint: float) -> float:
         loop = machine.loop
         state = loop._state
         loop._external_stop_ticks = 0

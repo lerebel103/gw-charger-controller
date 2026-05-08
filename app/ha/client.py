@@ -269,6 +269,8 @@ class MQTTClient:
             (f"{_PREFIX}/number/eco_mean_window/state", str(s.eco_mean_window_minutes)),
             (f"{_PREFIX}/number/solar_batt_day_limit/state", str(s.solar_battery_day_power_limit_w)),
             (f"{_PREFIX}/number/eco_day_min_batt_soc/state", str(s.eco_day_min_battery_soc_pct)),
+            (f"{_PREFIX}/number/eco_day_battery_full/state", str(s.eco_day_battery_full_pct)),
+            (f"{_PREFIX}/number/eco_day_battery_full_exit/state", str(s.eco_day_battery_full_exit_pct)),
             (f"{_PREFIX}/number/eco_day_ramp_step/state", str(s.eco_day_ramp_step_w)),
             (f"{_PREFIX}/number/measurement_correction/state", str(s.correction_pct)),
             (f"{_PREFIX}/text/solar_battery_discharge_start/state", s.solar_battery_discharge_start),
@@ -319,7 +321,7 @@ class MQTTClient:
         if topic_str == _VEHICLE_SOC_TOPIC:
             try:
                 soc = float(payload)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 logger.warning("Invalid vehicle SOC value: %s", payload)
                 return
             if not (0 <= soc <= 100):
@@ -359,7 +361,7 @@ class MQTTClient:
         elif vtype == "float":
             try:
                 val = float(payload)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 logger.warning("Invalid float value '%s' for %s", payload, attr)
                 return
             rng = _NUMBER_RANGES.get(attr)
@@ -371,7 +373,7 @@ class MQTTClient:
         elif vtype == "int":
             try:
                 val_i = int(float(payload))
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 logger.warning("Invalid int value '%s' for %s", payload, attr)
                 return
             rng = _NUMBER_RANGES.get(attr)

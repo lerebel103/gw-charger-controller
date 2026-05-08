@@ -78,6 +78,7 @@ class StandbyModeHandler(ModeSetpointHandler):
     def compute(self, loop: ModeLoopProtocol) -> float:
         loop._eco_charging = False
         loop._eco_day_setpoint_w = _MIN_CHARGE_W
+        loop._eco_day_battery_full = False
         loop._state_machine.set_mode_state(ChargeModeState.STANDBY)
         return 0.0
 
@@ -90,6 +91,7 @@ class EcoVictronDownModeHandler(ModeSetpointHandler):
     def compute(self, loop: ModeLoopProtocol) -> float:
         logger.warning("Eco mode: Victron comms down - pausing EV charging")
         loop._eco_charging = False
+        loop._eco_day_battery_full = False
         loop._state_machine.set_mode_state(ChargeModeState.ECO_VICTRON_DOWN)
         return 0.0
 
@@ -149,10 +151,20 @@ class EcoDayModeHandler(ModeSetpointHandler):
                     state.eco_day_min_battery_soc_pct,
                 )
                 loop._eco_charging = False
+            loop._eco_day_battery_full = False
             loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_SOC_GATE)
             return 0.0
 
-        battery_full = state.solar_battery_soc_pct is not None and state.solar_battery_soc_pct >= 96.0
+        # Hysteresis for battery-full gate: latch True at eco_day_battery_full_pct,
+        # only clear when SOC drops below eco_day_battery_full_exit_pct.
+        if state.solar_battery_soc_pct is not None and state.solar_battery_soc_pct >= state.eco_day_battery_full_pct:
+            loop._eco_day_battery_full = True
+        elif (
+            state.solar_battery_soc_pct is not None
+            and state.solar_battery_soc_pct < state.eco_day_battery_full_exit_pct
+        ):
+            loop._eco_day_battery_full = False
+
         current_mean_grid = mean_grid_power(loop)
         current_mean_battery = mean_battery_power(loop)
 
@@ -188,7 +200,7 @@ class EcoDayModeHandler(ModeSetpointHandler):
             loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_COOLDOWN)
             return 0.0
 
-        if not battery_full:
+        if not loop._eco_day_battery_full:
             loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_MINIMUM)
             return _MIN_CHARGE_W
 

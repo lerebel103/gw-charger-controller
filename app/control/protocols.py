@@ -47,6 +47,7 @@ class ModeLoopProtocol(SamplingLoopProtocol, Protocol):
     _state_machine: StateMachineProtocol
     _eco_charging: bool
     _eco_day_setpoint_w: float
+    _eco_day_battery_full: bool
     _eco_day_stopped_at: float | None
     _victron_client: VictronClientProtocol
 
