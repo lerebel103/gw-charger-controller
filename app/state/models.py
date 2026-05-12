@@ -74,9 +74,11 @@ class AppState:
     control_loop_interval_s: float = 10.0
     eco_mean_window_minutes: int = 5
     solar_battery_day_power_limit_w: float = -1500.0
-    eco_day_min_battery_soc_pct: float = 75.0
-    eco_day_battery_full_pct: float = 96.0
-    eco_day_battery_full_exit_pct: float = 90.0
+    eco_day_grid_export_charge_start_w: float = -1400.0
+    eco_day_min_solar_battery_soc_pct: float = 75.0
+    eco_day_solar_battery_full_pct: float = 96.0
+    eco_day_solar_battery_full_exit_pct: float = 90.0
+    eco_day_solar_battery_charge_start_w: float = 5500.0
     eco_day_ramp_step_w: float = 200.0
     correction_pct: float = 5.6
 
@@ -108,9 +110,11 @@ PERSISTED_FIELDS: set[str] = {
     "control_loop_interval_s",
     "eco_mean_window_minutes",
     "solar_battery_day_power_limit_w",
-    "eco_day_min_battery_soc_pct",
-    "eco_day_battery_full_pct",
-    "eco_day_battery_full_exit_pct",
+    "eco_day_grid_export_charge_start_w",
+    "eco_day_min_solar_battery_soc_pct",
+    "eco_day_solar_battery_full_pct",
+    "eco_day_solar_battery_full_exit_pct",
+    "eco_day_solar_battery_charge_start_w",
     "eco_day_ramp_step_w",
     "correction_pct",
     "ev_charger_ip",

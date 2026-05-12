@@ -274,7 +274,7 @@ class ChargingStateMachine:
             return "victron_down"
         if state.charge_mode == "Eco" and not is_within_discharge_window(state):
             soc = state.solar_battery_soc_pct
-            if soc is not None and soc < state.eco_day_min_battery_soc_pct:
+            if soc is not None and soc < state.eco_day_min_solar_battery_soc_pct:
                 return "eco_day_soc_gate"
             mean_battery = mean_battery_power(self.loop)
             if mean_battery is not None and mean_battery < state.solar_battery_day_power_limit_w:

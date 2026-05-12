@@ -14,6 +14,13 @@ logger = logging.getLogger(__name__)
 
 REQUIRED_FIELDS = ("mqtt_host", "mqtt_port", "mqtt_username", "mqtt_password")
 
+# Legacy config key names -> new names (for backward compatibility)
+_LEGACY_KEY_MAP: dict[str, str] = {
+    "eco_day_min_battery_soc_pct": "eco_day_min_solar_battery_soc_pct",
+    "eco_day_battery_full_pct": "eco_day_solar_battery_full_pct",
+    "eco_day_battery_full_exit_pct": "eco_day_solar_battery_full_exit_pct",
+}
+
 
 class ConfigError(Exception):
     """Raised when the configuration file is missing, unparseable, or incomplete."""
@@ -55,8 +62,10 @@ class ConfigManager:
 
         state = AppState()
         for key, value in data.items():
-            if hasattr(state, key):
-                setattr(state, key, value)
+            # Map legacy config keys to their new names
+            resolved_key = _LEGACY_KEY_MAP.get(key, key)
+            if hasattr(state, resolved_key):
+                setattr(state, resolved_key, value)
 
         self._state = state
         return state

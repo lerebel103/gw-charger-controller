@@ -1,5 +1,9 @@
 # Agent Instructions for GW Charger Controller
 
+## Git Policy
+
+- **Never commit or push code without explicit user permission.** Always wait for the user to approve before running `git commit`, `git push`, or creating tags/PRs.
+
 ## Project Architecture
 
 This document describes the implementation conventions and architectural decisions for agents working on this codebase.

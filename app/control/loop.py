@@ -89,6 +89,8 @@ class ControlLoop:
                 logger.info("EV vehicle connected")
             elif not self._state.ev_connected and self._prev_ev_connected is not False:
                 logger.info("EV vehicle disconnected")
+                self._eco_charging = False
+                self._eco_day_battery_full = False
                 if self._state.ev_max_soc_pct != _EV_MAX_SOC_DEFAULT:
                     self._state.ev_max_soc_pct = _EV_MAX_SOC_DEFAULT
                     logger.info("Reset max EV SOC to %.0f%%", _EV_MAX_SOC_DEFAULT)
