@@ -7,7 +7,6 @@ from abc import ABC, abstractmethod
 from app.control.constants import (
     _ECO_DAY_COOLDOWN_S,
     _EV_MAX_SOC_MARGIN_PCT,
-    _GRID_EXPORT_START_THRESHOLD_W,
     _MAX_CHARGE_W,
     _MIN_CHARGE_W,
     _RAMP_DEADBAND_W,
@@ -143,25 +142,29 @@ class EcoDayModeHandler(ModeSetpointHandler):
     def compute(self, loop: ModeLoopProtocol) -> float:
         state = loop._state
 
-        if state.solar_battery_soc_pct is not None and state.solar_battery_soc_pct < state.eco_day_min_battery_soc_pct:
+        if state.solar_battery_soc_pct is not None and (
+            state.solar_battery_soc_pct < state.eco_day_min_solar_battery_soc_pct
+        ):
             if loop._eco_charging:
                 logger.info(
                     "Eco day: pausing charge (home battery SOC %.0f%% < threshold %.0f%%)",
                     state.solar_battery_soc_pct,
-                    state.eco_day_min_battery_soc_pct,
+                    state.eco_day_min_solar_battery_soc_pct,
                 )
                 loop._eco_charging = False
             loop._eco_day_battery_full = False
             loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_SOC_GATE)
             return 0.0
 
-        # Hysteresis for battery-full gate: latch True at eco_day_battery_full_pct,
-        # only clear when SOC drops below eco_day_battery_full_exit_pct.
-        if state.solar_battery_soc_pct is not None and state.solar_battery_soc_pct >= state.eco_day_battery_full_pct:
+        # Hysteresis for battery-full gate: latch True at eco_day_solar_battery_full_pct,
+        # only clear when SOC drops below eco_day_solar_battery_full_exit_pct.
+        if state.solar_battery_soc_pct is not None and (
+            state.solar_battery_soc_pct >= state.eco_day_solar_battery_full_pct
+        ):
             loop._eco_day_battery_full = True
         elif (
             state.solar_battery_soc_pct is not None
-            and state.solar_battery_soc_pct < state.eco_day_battery_full_exit_pct
+            and state.solar_battery_soc_pct < state.eco_day_solar_battery_full_exit_pct
         ):
             loop._eco_day_battery_full = False
 
@@ -175,14 +178,21 @@ class EcoDayModeHandler(ModeSetpointHandler):
                 return 0.0
 
         if not loop._eco_charging:
-            if current_mean_grid is not None and current_mean_grid <= _GRID_EXPORT_START_THRESHOLD_W:
+            grid_export_met = (
+                current_mean_grid is not None and current_mean_grid <= state.eco_day_grid_export_charge_start_w
+            )
+            battery_charge_met = (
+                current_mean_battery is not None and current_mean_battery >= state.eco_day_solar_battery_charge_start_w
+            )
+            if grid_export_met or battery_charge_met:
                 loop._eco_charging = True
                 loop._eco_day_setpoint_w = _MIN_CHARGE_W
                 loop._eco_day_stopped_at = None
                 logger.info(
-                    "Eco day: starting charge at %.0f W (mean grid=%.0f W)",
+                    "Eco day: starting charge at %.0f W (mean grid=%.0f W, mean battery=%.0f W)",
                     loop._eco_day_setpoint_w,
-                    current_mean_grid,
+                    current_mean_grid if current_mean_grid is not None else 0,
+                    current_mean_battery if current_mean_battery is not None else 0,
                 )
             else:
                 loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_WAITING_FOR_EXPORT)

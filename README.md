@@ -115,27 +115,39 @@ Eco mode maximises the use of free solar energy. It behaves differently dependin
 
 **Outside the battery discharge window** (daytime):
 
-The controller uses three battery SOC thresholds to determine charging behaviour. These create distinct operating bands with hysteresis to prevent oscillation:
+The controller uses three solar battery SOC thresholds to determine charging behaviour. These create distinct operating bands with hysteresis to prevent oscillation:
 
-| Home Battery SOC | Charging Behaviour | State |
+| Solar Battery SOC | Charging Behaviour | State |
 |---|---|---|
-| Below **Eco Day Min Batt SOC** (default 75%) | Charging stops entirely (setpoint → 0). Battery gets full priority. | `ECO_DAY_SOC_GATE` |
-| Between **Min Batt SOC** and **Battery Full Exit SOC** (75%–90%) | Charges at minimum power (4400 W) only. No ramping. | `ECO_DAY_MINIMUM` |
-| Between **Battery Full Exit SOC** and **Battery Full SOC** (90%–96%) | Depends on previous state (hysteresis — see below). | — |
-| Above **Eco Day Battery Full SOC** (default 96%) | Full ramp mode. Setpoint increases to match available solar export. | `ECO_DAY_RAMPING` |
+| Below **Eco Day Min Solar Batt SOC** (default 75%) | Charging stops entirely (setpoint → 0). Solar battery gets full priority. | `ECO_DAY_SOC_GATE` |
+| Between **Min Solar Batt SOC** and **Solar Batt Full Exit SOC** (75%–90%) | Charges at minimum power (4400 W) only, if start conditions are met. No ramping. | `ECO_DAY_MINIMUM` |
+| Between **Solar Batt Full Exit SOC** and **Solar Batt Full SOC** (90%–96%) | Depends on previous state (hysteresis — see below). | — |
+| Above **Eco Day Solar Batt Full SOC** (default 96%) | Full ramp mode. Setpoint increases to match available solar export. | `ECO_DAY_RAMPING` |
+
+**Start conditions (required before any eco day charging begins):**
+
+EV charging will only start when `_eco_charging` transitions from `False` to `True`. This requires ALL of:
+- Vehicle is connected
+- Solar battery SOC ≥ `eco_day_min_solar_battery_soc_pct` (75%)
+- Not in cooldown period (5 min after a stop)
+
+AND at least ONE of these trigger conditions (based on rolling means):
+- **Grid export**: mean grid power ≤ `eco_day_grid_export_charge_start_w` (default -1400 W, sustained export to grid)
+- **Solar battery charging surplus**: mean solar battery power ≥ `eco_day_solar_battery_charge_start_w` (default 5500 W) — the solar battery is absorbing enough power that there's clearly surplus available to share with the EV
+
+On vehicle disconnect, `_eco_charging` is reset to `False`, so start conditions must be re-evaluated on the next connection.
 
 **Hysteresis behaviour (90%–96% band):**
-- If the battery SOC rises above 96%, the controller latches into ramping mode.
+- If the solar battery SOC rises above 96%, the controller latches into ramping mode.
 - Once ramping, it stays ramping even if SOC dips back into the 90%–96% range (e.g. from the charger drawing power).
 - Ramping only exits when SOC drops below 90%, at which point it falls back to minimum charging (4400 W).
-- This prevents the setpoint from oscillating between ramping and minimum when the battery hovers near full.
+- This prevents the setpoint from oscillating between ramping and minimum when the solar battery hovers near full.
 
 **Ramp mode details:**
 - A rolling mean of grid power is computed over a configurable window (default 5 min).
-- Charging starts when the mean grid power drops to -1400 W or below (sustained solar export).
-- The setpoint ramps up from minimum, using home battery power as feedback to find the max sustainable rate.
-- If the home battery starts discharging, the setpoint is reduced to prevent home battery drain.
-- Charging stops when the mean home battery power indicates sustained discharge.
+- The setpoint ramps up from minimum, using solar battery power as feedback to find the max sustainable rate.
+- If the solar battery starts discharging, the setpoint is reduced to prevent solar battery drain.
+- Charging stops when the mean solar battery power indicates sustained discharge.
 - After stopping, a 5-minute cooldown prevents restarting to avoid rapid on/off cycling from clouds or transient house loads.
 
 **Inside the battery discharge window** (default 23:00–06:00, configurable):
@@ -147,12 +159,14 @@ The controller uses three battery SOC thresholds to determine charging behaviour
 
 | HA Entity Name | Config Key | Default | Range | Description |
 |---|---|---|---|---|
-| Eco Day Min Batt SOC | `eco_day_min_battery_soc_pct` | 75% | 0–100% | Below this SOC, EV charging stops entirely. Home battery gets full priority. |
-| Eco Day Battery Full Exit SOC | `eco_day_battery_full_exit_pct` | 90% | 0–100% | Once ramping, the controller drops back to minimum charging when SOC falls below this. |
-| Eco Day Battery Full SOC | `eco_day_battery_full_pct` | 96% | 80–100% | SOC threshold to enter ramp mode. Must be higher than the exit threshold. |
+| Eco Day Min Solar Batt SOC | `eco_day_min_solar_battery_soc_pct` | 75% | 0–100% | Below this SOC, EV charging stops entirely. Solar battery gets full priority. |
+| Eco Day Solar Batt Full Exit SOC | `eco_day_solar_battery_full_exit_pct` | 90% | 0–100% | Once ramping, the controller drops back to minimum charging when SOC falls below this. |
+| Eco Day Solar Batt Full SOC | `eco_day_solar_battery_full_pct` | 96% | 80–100% | SOC threshold to enter ramp mode. Must be higher than the exit threshold. |
+| Eco Day Solar Batt Charge Start | `eco_day_solar_battery_charge_start_w` | 5500 W | 2000–8000 W | If mean solar battery charging power exceeds this, EV charging starts (alternative to grid export trigger). |
 | Eco Day Ramp Step | `eco_day_ramp_step_w` | 200 W | 10–500 W | How much the setpoint increases/decreases per control loop cycle during ramping. |
+| Eco Day Grid Export Charge Start | `eco_day_grid_export_charge_start_w` | -1400 W | -5000 to -100 W | Mean grid power must drop to this value (export) to trigger EV charging start. More negative = more export required. |
 | Eco Mean Window | `eco_mean_window_minutes` | 5 min | 1–10 min | Rolling average window for grid and battery power used in start/stop decisions. |
-| Solar Batt Pwr Lim (day) | `solar_battery_day_power_limit_w` | -500 W | -10000–0 W | If mean battery power drops below this (discharging), eco day charging stops. |
+| Solar Batt Pwr Lim (day) | `solar_battery_day_power_limit_w` | -500 W | -10000–0 W | If mean solar battery power drops below this (discharging), eco day charging stops. |
 | Control Loop Interval | `control_loop_interval_s` | 5 s | 1–60 s | How often the control loop runs. Affects ramp speed (ramp step × interval). |
 
 ### Manual Mode
