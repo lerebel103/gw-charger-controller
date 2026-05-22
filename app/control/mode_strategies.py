@@ -104,6 +104,14 @@ class EcoNightModeHandler(ModeSetpointHandler):
         state = loop._state
         ev_soc = get_ev_soc(loop)
 
+        # Cooldown after battery discharge limit trip
+        if loop._eco_night_stopped_at is not None:
+            elapsed = _time.monotonic() - loop._eco_night_stopped_at
+            if elapsed < _ECO_DAY_COOLDOWN_S:
+                loop._state_machine.set_mode_state(ChargeModeState.ECO_NIGHT_FLOOR_STOP)
+                return 0.0
+            loop._eco_night_stopped_at = None
+
         battery_flat = (
             state.solar_battery_power_w is not None
             and state.solar_battery_power_w > -100.0
@@ -131,7 +139,16 @@ class EcoNightModeHandler(ModeSetpointHandler):
 
         loop._state_machine.set_mode_state(ChargeModeState.ECO_NIGHT_BATTERY)
         setpoint = clamp(state.solar_battery_max_ev_charge_power_w, _MIN_CHARGE_W, _MAX_CHARGE_W)
-        return limit_battery_discharge(loop, setpoint, state.solar_battery_max_discharge_w)
+        result = limit_battery_discharge(loop, setpoint, state.solar_battery_max_discharge_w)
+        if result == 0.0:
+            loop._eco_night_stopped_at = _time.monotonic()
+            logger.info(
+                "Eco night: battery discharge limit exceeded (battery=%.0f W, limit=%.0f W), cooldown %.0f s",
+                state.solar_battery_power_w or 0,
+                state.solar_battery_max_discharge_w,
+                _ECO_DAY_COOLDOWN_S,
+            )
+        return result
 
 
 class EcoDayModeHandler(ModeSetpointHandler):

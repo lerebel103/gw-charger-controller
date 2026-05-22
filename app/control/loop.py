@@ -53,6 +53,7 @@ class ControlLoop:
         self._external_stop_ticks: int = 0
         self._start_time: float = _time.monotonic()
         self._eco_day_stopped_at: float | None = None
+        self._eco_night_stopped_at: float | None = None
         self._standby_write_quiet: bool = False
         self._grid_power_samples: list[tuple[float, float]] = []
         self._battery_power_samples: list[tuple[float, float]] = []
