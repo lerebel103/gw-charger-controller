@@ -468,6 +468,34 @@ class TestEcoNightScenarios:
         cl = make_control_loop(state)
         assert setpoint_eco_night(cl) == 5000.0
 
+    def test_cooldown_after_discharge_limit_trip(self):
+        """After battery discharge limit trips, cooldown prevents immediate restart."""
+        state = self._make_state(
+            solar_battery_power_w=-8000.0,  # triggers limit
+            solar_battery_max_discharge_w=6000.0,
+        )
+        cl = make_control_loop(state)
+        # First call trips the limit and sets cooldown
+        assert setpoint_eco_night(cl) == 0.0
+        assert cl._eco_night_stopped_at is not None
+
+        # Next call: battery recovers but cooldown is active
+        cl._state.solar_battery_power_w = -3000.0  # within limits now
+        assert setpoint_eco_night(cl) == 0.0  # still blocked by cooldown
+
+    def test_cooldown_expired_allows_restart(self):
+        """After cooldown expires, eco night resumes charging."""
+        state = self._make_state(
+            solar_battery_power_w=-3000.0,  # within limits
+            solar_battery_max_discharge_w=6000.0,
+        )
+        cl = make_control_loop(state)
+        # Simulate expired cooldown
+        cl._eco_night_stopped_at = _time.monotonic() - 400.0  # > 300s
+        result = setpoint_eco_night(cl)
+        assert result == 5000.0
+        assert cl._eco_night_stopped_at is None
+
 
 class TestEcoDayRealWorldScenarios:
     """Eco day scenarios with real system parameters.

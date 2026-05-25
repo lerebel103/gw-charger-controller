@@ -516,6 +516,24 @@ class TestEVChargerModbusClient:
         # Should not raise
 
     @pytest.mark.asyncio
+    async def test_start_charging_clears_setpoint_cache(self):
+        """start_charging clears ev_charger_setpoint_raw so next write is unconditional."""
+        state = self._make_state()
+        state.ev_connected = True
+        state.ev_charger_setpoint_raw = 44  # cached from previous write
+        ec = EVChargerModbusClient(state)
+
+        mock_client = AsyncMock()
+        mock_client.connected = True
+        mock_client.write_register = AsyncMock(return_value=_make_response([]))
+        ec._client = mock_client
+
+        await ec.start_charging()
+
+        assert state.ev_charger_setpoint_raw is None
+        mock_client.write_register.assert_called_once_with(address=10060, value=2, device_id=247)
+
+    @pytest.mark.asyncio
     async def test_write_advanced_charging_mode_success(self):
         state = self._make_state()
         ec = EVChargerModbusClient(state)

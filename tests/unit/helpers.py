@@ -36,6 +36,7 @@ def make_ns_loop(state: AppState, *, victron_connected: bool = True, **overrides
         _eco_day_setpoint_w=_MIN_CHARGE_W,
         _eco_day_battery_full=False,
         _eco_day_stopped_at=None,
+        _eco_night_stopped_at=None,
         _charging_session_state=ChargeSessionState.IDLE,
         _charge_mode_state=ChargeModeState.IDLE,
         _stopping_at=None,

@@ -367,9 +367,14 @@ class EVChargerModbusClient:
         Register 10060 is a non-persistent command register. The charger clears
         it after processing, so this method should only be called when a start
         transition is required.
+
+        Clears the cached setpoint so the next write_setpoint call will
+        unconditionally re-send the value, ensuring the charger has the
+        correct power limit before it begins drawing current.
         """
         if not self.connected:
             return
+        self._state.ev_charger_setpoint_raw = None
         try:
             await self._client.write_register(address=_REG_CHARGER_ENABLE, value=2, device_id=_SLAVE_ID)
         except (ModbusException, OSError) as exc:
