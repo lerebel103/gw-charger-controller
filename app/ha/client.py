@@ -325,7 +325,7 @@ class MQTTClient:
         if topic_str == _VEHICLE_SOC_TOPIC:
             try:
                 soc = float(payload)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 logger.warning("Invalid vehicle SOC value: %s", payload)
                 return
             if not (0 <= soc <= 100):
@@ -367,7 +367,7 @@ class MQTTClient:
         elif vtype == "float":
             try:
                 val = float(payload)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 logger.warning("Invalid float value '%s' for %s", payload, attr)
                 await self._echo_current_value(topic_str, attr)
                 return
@@ -381,7 +381,7 @@ class MQTTClient:
         elif vtype == "int":
             try:
                 val_i = int(float(payload))
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 logger.warning("Invalid int value '%s' for %s", payload, attr)
                 await self._echo_current_value(topic_str, attr)
                 return
