@@ -3,8 +3,8 @@
 Logs the first occurrence of a message immediately, then suppresses repeats
 for a configurable interval. When the message recurs after suppression, it
 logs the message again along with a count of how many times it was suppressed.
-When the condition clears (no repeat for a full interval), a recovery summary
-is logged.
+When the caller explicitly calls ``clear(key)`` to signal recovery, a summary
+is logged indicating the condition has resolved.
 """
 
 from __future__ import annotations
@@ -73,6 +73,8 @@ class LogThrottle:
                     key,
                     total,
                 )
+            else:
+                self._logger.info("%s: condition cleared", key)
             entry.active = False
             entry.first_logged_at = None
             entry.last_logged_at = None
