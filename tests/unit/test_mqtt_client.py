@@ -301,7 +301,7 @@ class TestMQTTRunLoop:
         mqtt_client = AsyncMock()
         mqtt_context = AsyncMock()
         mqtt_context.__aenter__.return_value = mqtt_client
-
+        mqtt_context.__aexit__.return_value = False
         class StopLoopError(Exception):
             pass
 
