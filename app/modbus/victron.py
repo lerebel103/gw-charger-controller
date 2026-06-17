@@ -8,9 +8,11 @@ from pymodbus.client import AsyncModbusTcpClient
 from pymodbus.exceptions import ModbusException
 
 from app.backoff import exponential_backoff
+from app.log_throttle import LogThrottle
 from app.state import AppState
 
 logger = logging.getLogger(__name__)
+_throttle = LogThrottle(logger, suppress_seconds=60.0)
 
 # Victron system service unit ID (com.victronenergy.system)
 _SYSTEM_UNIT_ID = 100
@@ -80,11 +82,13 @@ class VictronModbusClient:
                 self._connected_ip = ip
                 self._connected_port = port
                 self._reconnect_attempt = 0
-                logger.info("Connected to Victron GX at %s:%d", ip, port)
+                _throttle.clear("victron_connect_fail")
+                _throttle.info("victron_connected", "Connected to Victron GX at %s:%d", ip, port)
             else:
+                _throttle.warning("victron_connect_fail", "Victron GX connection failed (no connect)")
                 self._schedule_retry()
         except (OSError, ModbusException) as exc:
-            logger.warning("Victron GX connection failed: %s", exc)
+            _throttle.warning("victron_connect_fail", "Victron GX connection failed: %s", exc)
             self._schedule_retry()
 
     async def read(self) -> None:
@@ -93,8 +97,10 @@ class VictronModbusClient:
             return
         try:
             await self._read_registers()
+            _throttle.clear("victron_read_fail")
+            _throttle.clear("victron_connected")
         except (ModbusException, OSError) as exc:
-            logger.warning("Victron GX read failed: %s", exc)
+            _throttle.warning("victron_read_fail", "Victron GX read failed: %s", exc)
             await self._close()
 
     async def reconnect(self) -> None:

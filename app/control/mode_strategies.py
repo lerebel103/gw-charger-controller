@@ -21,9 +21,11 @@ from app.control.power_utils import (
 )
 from app.control.protocols import ModeLoopProtocol
 from app.control.time_utils import is_within_discharge_window
+from app.log_throttle import LogThrottle
 from app.state import ChargeModeState
 
 logger = logging.getLogger(__name__)
+_throttle = LogThrottle(logger, suppress_seconds=60.0)
 
 
 class ModeSetpointHandler(ABC):
@@ -88,7 +90,7 @@ class EcoVictronDownModeHandler(ModeSetpointHandler):
         return "eco_victron_down"
 
     def compute(self, loop: ModeLoopProtocol) -> float:
-        logger.warning("Eco mode: Victron comms down - pausing EV charging")
+        _throttle.warning("eco_victron_down", "Eco mode: Victron comms down - pausing EV charging")
         loop._eco_charging = False
         loop._eco_day_battery_full = False
         loop._state_machine.set_mode_state(ChargeModeState.ECO_VICTRON_DOWN)
@@ -275,6 +277,8 @@ def resolve_mode_handler(loop: ModeLoopProtocol) -> ModeSetpointHandler:
 
     if not loop._victron_client.connected:
         return _ECO_VICTRON_DOWN_HANDLER
+
+    _throttle.clear("eco_victron_down")
 
     if is_within_discharge_window(loop._state):
         return _ECO_NIGHT_HANDLER

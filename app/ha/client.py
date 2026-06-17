@@ -53,6 +53,7 @@ from app.ha.parsers import (
 from app.ha.parsers import (
     parse_single_phase_payload as _parse_single_phase_payload,
 )
+from app.log_throttle import LogThrottle
 from app.state import (
     AdvancedChargingMode,
     AppState,
@@ -62,6 +63,7 @@ from app.state import (
 )
 
 logger = logging.getLogger(__name__)
+_throttle = LogThrottle(logger, suppress_seconds=60.0)
 
 
 class MQTTClient:
@@ -529,6 +531,8 @@ class MQTTClient:
                 ) as client:
                     self._client = client
                     attempt = 0
+                    _throttle.clear("mqtt_connect_fail")
+                    _throttle.clear("mqtt_retry")
                     logger.info(
                         "Connected to MQTT broker at %s:%d",
                         self._state.mqtt_host,
@@ -555,12 +559,12 @@ class MQTTClient:
                     )
 
             except aiomqtt.MqttError as exc:
-                logger.warning("MQTT connection error: %s", exc)
+                _throttle.warning("mqtt_connect_fail", "MQTT connection error: %s", exc)
             finally:
                 self._client = None
 
             delay = exponential_backoff(attempt)
-            logger.info("Retrying MQTT connection in %.1f s", delay)
+            _throttle.info("mqtt_retry", "Retrying MQTT connection in %.1f s", delay)
             await asyncio.sleep(delay)
             attempt += 1
 
@@ -579,7 +583,7 @@ class MQTTClient:
                         await self._publish_discovery()
                     await self._publish_state(item)
             except aiomqtt.MqttError:
-                logger.warning("Failed to publish from queue")
+                _throttle.warning("mqtt_publish_fail", "Failed to publish from queue")
                 raise
 
     async def _process_messages(self) -> None:
