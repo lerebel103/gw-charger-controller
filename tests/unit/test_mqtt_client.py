@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -288,3 +288,34 @@ class TestMQTTPublishConfigState:
             "OFF",
             retain=True,
         )
+
+
+class TestMQTTRunLoop:
+    @pytest.mark.asyncio
+    async def test_run_loop_clears_publish_fail_on_successful_connect(self):
+        state = AppState(mqtt_host="broker", mqtt_port=1883)
+        cfg = MagicMock()
+        queue: asyncio.Queue = asyncio.Queue()
+        client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue)
+
+        mqtt_client = AsyncMock()
+        mqtt_context = AsyncMock()
+        mqtt_context.__aenter__.return_value = mqtt_client
+        mqtt_context.__aexit__.return_value = False
+
+        class StopLoopError(Exception):
+            pass
+
+        with (
+            patch("app.ha.client._throttle") as throttle,
+            patch("app.ha.client.aiomqtt.Client", return_value=mqtt_context),
+            patch.object(client, "_publish_discovery", new_callable=AsyncMock),
+            patch.object(client, "_publish_config_state", new_callable=AsyncMock),
+            patch("app.ha.client.asyncio.gather", new_callable=AsyncMock, side_effect=StopLoopError),
+            pytest.raises(StopLoopError),
+        ):
+            await client.run_loop()
+
+        throttle.clear.assert_any_call("mqtt_connect_fail")
+        throttle.clear.assert_any_call("mqtt_publish_fail")
+        throttle.reset.assert_called_once_with("mqtt_retry")

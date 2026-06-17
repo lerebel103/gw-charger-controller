@@ -7,9 +7,11 @@ from pymodbus.client import AsyncModbusTcpClient
 from pymodbus.exceptions import ModbusException
 
 from app.backoff import exponential_backoff
+from app.log_throttle import LogThrottle
 from app.state import AdvancedChargingMode, AppState, ChargerStatus, PlugAndChargeAutoStart, SinglePhaseSwitching
 
 logger = logging.getLogger(__name__)
+_throttle = LogThrottle(logger, suppress_seconds=60.0)
 
 # Default Modbus slave ID for the EV charger
 _SLAVE_ID = 247
@@ -91,12 +93,15 @@ class EVChargerModbusClient:
                 self._connected_port = port
                 self._reconnect_attempt = 0
                 self._serial_read_attempted = False
-                logger.info("Connected to EV charger at %s:%d", ip, port)
+                _throttle.clear("ev_connect_fail")
+                _throttle.reset("ev_write_setpoint_disconnected")
+                _throttle.info("ev_connected", "Connected to EV charger at %s:%d", ip, port)
                 await self._read_serial_number_once()
             else:
+                _throttle.warning("ev_connect_fail", "EV charger connection failed (no connect)")
                 self._schedule_retry()
         except (OSError, ModbusException) as exc:
-            logger.warning("EV charger connection failed: %s", exc)
+            _throttle.warning("ev_connect_fail", "EV charger connection failed: %s", exc)
             self._schedule_retry()
 
     async def reconnect(self) -> None:
@@ -115,8 +120,10 @@ class EVChargerModbusClient:
             return
         try:
             await self._read_registers()
+            _throttle.clear("ev_read_fail")
+            _throttle.reset("ev_connected")
         except (ModbusException, OSError) as exc:
-            logger.warning("EV charger read failed: %s", exc)
+            _throttle.warning("ev_read_fail", "EV charger read failed: %s", exc)
             await self._close()
 
     # ------------------------------------------------------------------
@@ -142,7 +149,7 @@ class EVChargerModbusClient:
             return
 
         if not self.connected:
-            logger.warning("write_setpoint skipped: Modbus not connected")
+            _throttle.warning("ev_write_setpoint_disconnected", "write_setpoint skipped: Modbus not connected")
             return
 
         raw = round(power_w / 100) if power_w > 0 else 0
@@ -157,9 +164,10 @@ class EVChargerModbusClient:
             if resp.isError():
                 raise ModbusException(f"Setpoint write error: {resp}")
             self._state.ev_charger_setpoint_raw = raw
+            _throttle.clear("ev_setpoint_write_fail")
             logger.debug("Wrote charging setpoint raw=%d (%.0f W)", raw, power_w)
         except (ModbusException, OSError) as exc:
-            logger.warning("EV charger setpoint write failed: %s", exc)
+            _throttle.warning("ev_setpoint_write_fail", "EV charger setpoint write failed: %s", exc)
 
     async def ensure_plug_and_charge(self) -> None:
         """Ensure plug-and-charge is enabled. Writes register 10019=1 if not already set."""
@@ -520,12 +528,18 @@ class EVChargerModbusClient:
                 device_id=_SLAVE_ID,
             )
             if mgp_resp.isError():
-                logger.warning("EV charger max grid power draw read error: %s", mgp_resp)
+                _throttle.warning("ev_max_grid_power_read", "EV charger max grid power draw read error: %s", mgp_resp)
                 self._state.ev_max_grid_power_draw_raw = None
             else:
+                _throttle.clear("ev_max_grid_power_read")
                 self._state.ev_max_grid_power_draw_raw = mgp_resp.registers[0]
         except (ModbusException, OSError) as exc:
-            logger.warning("Failed to read max grid power draw (register %d): %s", _REG_MAX_GRID_POWER_DRAW, exc)
+            _throttle.warning(
+                "ev_max_grid_power_read",
+                "Failed to read max grid power draw (register %d): %s",
+                _REG_MAX_GRID_POWER_DRAW,
+                exc,
+            )
             self._state.ev_max_grid_power_draw_raw = None
 
         # Compute voltage drop percentages
