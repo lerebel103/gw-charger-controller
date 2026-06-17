@@ -120,7 +120,7 @@ class EVChargerModbusClient:
         try:
             await self._read_registers()
             _throttle.clear("ev_read_fail")
-            _throttle.clear("ev_connected")
+            _throttle.reset("ev_connected")
         except (ModbusException, OSError) as exc:
             _throttle.warning("ev_read_fail", "EV charger read failed: %s", exc)
             await self._close()

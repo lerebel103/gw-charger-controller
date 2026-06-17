@@ -98,7 +98,7 @@ class VictronModbusClient:
         try:
             await self._read_registers()
             _throttle.clear("victron_read_fail")
-            _throttle.clear("victron_connected")
+            _throttle.reset("victron_connected")
         except (ModbusException, OSError) as exc:
             _throttle.warning("victron_read_fail", "Victron GX read failed: %s", exc)
             await self._close()

@@ -532,7 +532,7 @@ class MQTTClient:
                     self._client = client
                     attempt = 0
                     _throttle.clear("mqtt_connect_fail")
-                    _throttle.clear("mqtt_retry")
+                    _throttle.reset("mqtt_retry")
                     logger.info(
                         "Connected to MQTT broker at %s:%d",
                         self._state.mqtt_host,

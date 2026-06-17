@@ -62,6 +62,13 @@ class LogThrottle:
         entry.suppressed_count += 1
         return False, 0
 
+    @staticmethod
+    def _reset_entry(entry: _ThrottleEntry) -> None:
+        entry.active = False
+        entry.first_logged_at = None
+        entry.last_logged_at = None
+        entry.suppressed_count = 0
+
     def clear(self, key: str) -> None:
         """Mark a condition as resolved. Logs a recovery message if it was active."""
         entry = self._entries.get(key)
@@ -75,10 +82,13 @@ class LogThrottle:
                 )
             else:
                 self._logger.info("%s: condition cleared", key)
-            entry.active = False
-            entry.first_logged_at = None
-            entry.last_logged_at = None
-            entry.suppressed_count = 0
+            self._reset_entry(entry)
+
+    def reset(self, key: str) -> None:
+        """Silently reset throttle state without logging a recovery message."""
+        entry = self._entries.get(key)
+        if entry is not None:
+            self._reset_entry(entry)
 
     def warning(self, key: str, msg: str, *args: object) -> None:
         """Throttled warning log."""

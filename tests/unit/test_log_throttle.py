@@ -181,3 +181,19 @@ class TestLogThrottleClear:
             throttle.clear("key1")  # second clear is noop
 
         assert len(caplog.records) == 0
+
+
+class TestLogThrottleReset:
+    """reset() should clear throttle state without logging recovery."""
+
+    def test_reset_is_silent_and_next_call_logs_immediately(self, caplog):
+        logger = logging.getLogger("test.throttle.reset_silent")
+        throttle = LogThrottle(logger, suppress_seconds=60.0)
+
+        with caplog.at_level(logging.INFO, logger="test.throttle.reset_silent"):
+            throttle.info("key1", "Connected")
+            throttle.reset("key1")
+            throttle.info("key1", "Connected again")
+
+        info_messages = [record.message for record in caplog.records if record.levelno == logging.INFO]
+        assert info_messages == ["Connected", "Connected again"]
