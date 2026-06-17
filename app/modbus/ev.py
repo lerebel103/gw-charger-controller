@@ -94,6 +94,7 @@ class EVChargerModbusClient:
                 self._reconnect_attempt = 0
                 self._serial_read_attempted = False
                 _throttle.clear("ev_connect_fail")
+                _throttle.reset("ev_write_setpoint_disconnected")
                 _throttle.info("ev_connected", "Connected to EV charger at %s:%d", ip, port)
                 await self._read_serial_number_once()
             else:

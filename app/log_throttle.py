@@ -76,7 +76,7 @@ class LogThrottle:
             total = entry.suppressed_count
             if total > 0:
                 self._logger.info(
-                    "%s: condition cleared (suppressed %d repeat(s) during event)",
+                    "%s: condition cleared (suppressed %d repeat(s) since last log)",
                     key,
                     total,
                 )
