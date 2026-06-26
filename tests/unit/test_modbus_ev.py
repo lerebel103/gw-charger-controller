@@ -713,6 +713,8 @@ class TestEVChargerModbusClient:
         """read() marks EV comms unhealthy without force-closing the client below threshold."""
         state = self._make_state()
         state.ev_connected = True
+        state.ev_charger_status = 3
+        state.ev_charger_status_enum = ChargerStatus.CHARGING_IN_PROGRESS
         ec = EVChargerModbusClient(state)
 
         mock_client = AsyncMock()
@@ -727,6 +729,8 @@ class TestEVChargerModbusClient:
         assert ec._client is mock_client
         assert state.ev_comm_healthy is False
         assert state.ev_connected is True
+        assert state.ev_charger_status == 3
+        assert state.ev_charger_status_enum == ChargerStatus.CHARGING_IN_PROGRESS
         assert state.ev_last_read_error_at is not None
 
     @pytest.mark.asyncio

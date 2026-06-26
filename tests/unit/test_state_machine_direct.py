@@ -70,6 +70,35 @@ class TestCommands:
 
         assert machine.should_send_stop_command(0.0) is True
 
+    def test_ev_status_trustworthy_when_last_read_missing(self):
+        state = AppState(ev_connected=True, ev_comm_healthy=True)
+        loop = make_ns_loop(state)
+        machine = ChargingStateMachine(loop)
+
+        assert machine.ev_status_is_trustworthy() is True
+
+    def test_ev_status_not_trustworthy_when_last_read_stale(self):
+        state = AppState(
+            ev_connected=True,
+            ev_comm_healthy=True,
+            ev_last_read_ok_at=_time.monotonic() - 1000.0,
+        )
+        loop = make_ns_loop(state)
+        machine = ChargingStateMachine(loop)
+
+        assert machine.ev_status_is_trustworthy() is False
+
+    def test_ev_status_trustworthy_when_healthy_and_recent(self):
+        state = AppState(
+            ev_connected=True,
+            ev_comm_healthy=True,
+            ev_last_read_ok_at=_time.monotonic(),
+        )
+        loop = make_ns_loop(state)
+        machine = ChargingStateMachine(loop)
+
+        assert machine.ev_status_is_trustworthy() is True
+
 
 class TestApplyChargingEvents:
     def test_idle_positive_setpoint_emits_started_event(self):

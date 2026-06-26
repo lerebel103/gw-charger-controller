@@ -150,8 +150,6 @@ class EVChargerModbusClient:
             self._consecutive_read_failures += 1
             self._state.ev_comm_healthy = False
             self._state.ev_last_read_error_at = _t.monotonic()
-            self._state.ev_charger_status = None
-            self._state.ev_charger_status_enum = None
             _throttle.warning("ev_read_fail", "EV charger read failed: %s", exc)
             if self._consecutive_read_failures >= _MAX_CONSECUTIVE_READ_FAILURES:
                 await self._close()

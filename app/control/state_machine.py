@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 
 from app.control.constants import (
     _EV_MAX_SOC_MARGIN_PCT,
+    _EV_STATUS_STALE_S,
     _EXTERNAL_STOP_CONFIRM_TICKS,
     _STOPPED_DELAY_S,
     _STOPPING_MIN_DELAY_S,
@@ -362,5 +363,10 @@ class ChargingStateMachine:
         }
 
     def ev_status_is_trustworthy(self) -> bool:
-        """Return True when EV status has been refreshed successfully."""
-        return self.loop._state.ev_comm_healthy
+        """Return True when EV status is healthy and has a recent successful refresh."""
+        if not self.loop._state.ev_comm_healthy:
+            return False
+        last_ok = self.loop._state.ev_last_read_ok_at
+        if last_ok is None:
+            return True
+        return (_time.monotonic() - last_ok) <= _EV_STATUS_STALE_S
