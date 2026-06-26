@@ -261,7 +261,7 @@ _ECO_DAY_HANDLER = EcoDayModeHandler()
 
 def resolve_mode_handler(loop: ModeLoopProtocol) -> ModeSetpointHandler:
     """Resolve the top-level mode strategy for the current loop snapshot."""
-    if not loop._state.ev_connected:
+    if not loop._state.ev_connected or not loop._state.ev_comm_healthy:
         return _NO_VEHICLE_HANDLER
 
     ev_soc = get_ev_soc(loop)

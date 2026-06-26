@@ -106,3 +106,44 @@ class TestApplyChargingEvents:
         event = loop._publish_queue.get_nowait()
         assert event["event"] == "stopped"
         assert event["reason"] == "standby"
+
+    def test_comm_loss_does_not_trigger_external_stop_chatter(self):
+        state = AppState(
+            ev_connected=True,
+            ev_comm_healthy=False,
+            charge_mode="Eco",
+            ev_charger_status_enum=ChargerStatus.IDLE_CONNECTOR_PLUGGED,
+        )
+        loop = make_ns_loop(
+            state,
+            _charging_session_state=ChargeSessionState.CHARGING,
+            _last_positive_setpoint=4400.0,
+        )
+        machine = ChargingStateMachine(loop)
+
+        result = machine.apply_charging_events(4400.0)
+
+        assert result == 4400.0
+        assert loop._charging_session_state == ChargeSessionState.CHARGING
+
+    def test_stopped_pending_does_not_resume_when_comm_unhealthy(self):
+        state = AppState(
+            ev_connected=True,
+            ev_comm_healthy=False,
+            charge_mode="Eco",
+            ev_session_energy_wh=200.0,
+        )
+        loop = make_ns_loop(
+            state,
+            _charging_session_state=ChargeSessionState.STOPPED_PENDING,
+            _stopped_at=_time.monotonic() - 10.0,
+            _stopping_reason="external_stop",
+        )
+        machine = ChargingStateMachine(loop)
+
+        result = machine.apply_charging_events(4400.0)
+
+        assert result == 0.0
+        assert loop._charging_session_state == ChargeSessionState.IDLE
+        event = loop._publish_queue.get_nowait()
+        assert event["event"] == "stopped"

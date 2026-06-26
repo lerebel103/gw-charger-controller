@@ -22,6 +22,11 @@ class TestResolveModeHandler:
 
         assert resolve_mode_handler(loop).name == "no_vehicle"
 
+    def test_unhealthy_ev_comms_returns_no_vehicle_handler(self):
+        loop = make_ns_loop(AppState(ev_connected=True, ev_comm_healthy=False, charge_mode="Eco"))
+
+        assert resolve_mode_handler(loop).name == "no_vehicle"
+
     def test_standby_returns_standby_handler(self):
         loop = make_ns_loop(AppState(ev_connected=True, charge_mode="Standby"))
 

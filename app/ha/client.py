@@ -326,11 +326,13 @@ class MQTTClient:
             try:
                 soc = float(payload)
             except ValueError, TypeError:
-                logger.warning("Invalid vehicle SOC value: %s", payload)
+                _throttle.warning("vehicle_soc_invalid", "Invalid vehicle SOC value: %s", payload)
                 return
             if not (0 <= soc <= 100):
-                logger.warning("Vehicle SOC out of range [0-100]: %s", soc)
+                _throttle.warning("vehicle_soc_out_of_range", "Vehicle SOC out of range [0-100]: %s", soc)
                 return
+            _throttle.clear("vehicle_soc_invalid")
+            _throttle.clear("vehicle_soc_out_of_range")
             self._state.ev_soc_pct = soc
             self._state.ev_soc_pct_updated_at = time.monotonic()
             logger.debug("Received vehicle SOC: %.1f%%", soc)

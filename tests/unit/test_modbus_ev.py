@@ -696,8 +696,8 @@ class TestEVChargerModbusClient:
         mock_rr.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_read_closes_on_error(self):
-        """read() closes the connection on ModbusException."""
+    async def test_read_marks_comms_unhealthy_on_error(self):
+        """read() marks EV comms unhealthy without force-closing the client."""
         state = self._make_state()
         ec = EVChargerModbusClient(state)
 
@@ -710,7 +710,10 @@ class TestEVChargerModbusClient:
         with patch.object(ec, "_read_registers", side_effect=ModbusException("fail")):
             await ec.read()
 
-        assert ec._client is None
+        assert ec._client is mock_client
+        assert state.ev_comm_healthy is False
+        assert state.ev_connected is False
+        assert state.ev_last_read_error_at is not None
 
     @pytest.mark.asyncio
     async def test_retains_last_values_on_failure(self):

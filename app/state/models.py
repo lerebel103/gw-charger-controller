@@ -51,6 +51,9 @@ class AppState:
     ev_max_grid_power_draw_raw: int | None = None
     ev_soc_pct: float | None = None
     ev_soc_pct_updated_at: float | None = None
+    ev_comm_healthy: bool = True
+    ev_last_read_ok_at: float | None = None
+    ev_last_read_error_at: float | None = None
 
     # Computed diagnostics
     l1_voltage_drop_pct: float | None = None
