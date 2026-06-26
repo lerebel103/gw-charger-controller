@@ -697,7 +697,7 @@ class TestEVChargerModbusClient:
 
     @pytest.mark.asyncio
     async def test_read_marks_comms_unhealthy_on_error(self):
-        """read() marks EV comms unhealthy without force-closing the client."""
+        """read() marks EV comms unhealthy without force-closing the client below threshold."""
         state = self._make_state()
         ec = EVChargerModbusClient(state)
 
@@ -714,6 +714,29 @@ class TestEVChargerModbusClient:
         assert state.ev_comm_healthy is False
         assert state.ev_connected is False
         assert state.ev_last_read_error_at is not None
+
+    @pytest.mark.asyncio
+    async def test_read_force_closes_after_max_consecutive_failures(self):
+        """read() closes the connection after _MAX_CONSECUTIVE_READ_FAILURES."""
+        from app.modbus.ev import _MAX_CONSECUTIVE_READ_FAILURES
+
+        state = self._make_state()
+        ec = EVChargerModbusClient(state)
+
+        mock_client = AsyncMock()
+        mock_client.connected = True
+        mock_client.close = AsyncMock()
+        ec._client = mock_client
+
+        from pymodbus.exceptions import ModbusException
+
+        for _ in range(_MAX_CONSECUTIVE_READ_FAILURES):
+            mock_client.connected = True
+            with patch.object(ec, "_read_registers", side_effect=ModbusException("fail")):
+                await ec.read()
+
+        assert ec._client is None
+        assert state.ev_comm_healthy is False
 
     @pytest.mark.asyncio
     async def test_retains_last_values_on_failure(self):

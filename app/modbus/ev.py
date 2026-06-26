@@ -42,6 +42,7 @@ _RECONNECT_DELAY_S = 1.0
 _RECONNECT_DELAY_MAX_S = 60.0
 _CONNECT_TIMEOUT_S = 3.0
 _READ_RETRIES = 3
+_MAX_CONSECUTIVE_READ_FAILURES = 3  # force reconnect after this many consecutive read errors
 
 
 class EVChargerModbusClient:
@@ -147,6 +148,8 @@ class EVChargerModbusClient:
             self._state.ev_charger_status = None
             self._state.ev_charger_status_enum = None
             _throttle.warning("ev_read_fail", "EV charger read failed: %s", exc)
+            if self._consecutive_read_failures >= _MAX_CONSECUTIVE_READ_FAILURES:
+                await self._close()
 
     # ------------------------------------------------------------------
     # Write
