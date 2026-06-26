@@ -306,12 +306,19 @@ class TestMQTTRunLoop:
         class StopLoopError(Exception):
             pass
 
+        async def _gather_and_stop(*aws):
+            for aw in aws:
+                await aw
+            raise StopLoopError
+
         with (
             patch("app.ha.client._throttle") as throttle,
             patch("app.ha.client.aiomqtt.Client", return_value=mqtt_context),
             patch.object(client, "_publish_discovery", new_callable=AsyncMock),
             patch.object(client, "_publish_config_state", new_callable=AsyncMock),
-            patch("app.ha.client.asyncio.gather", new_callable=AsyncMock, side_effect=StopLoopError),
+            patch.object(client, "_drain_queue", new_callable=AsyncMock),
+            patch.object(client, "_process_messages", new_callable=AsyncMock),
+            patch("app.ha.client.asyncio.gather", new=AsyncMock(side_effect=_gather_and_stop)),
             pytest.raises(StopLoopError),
         ):
             await client.run_loop()
