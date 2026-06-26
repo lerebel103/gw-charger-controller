@@ -59,8 +59,6 @@ class EVChargerModbusClient:
         self._client: AsyncModbusTcpClient | None = None
         self._client_ip: str = ""
         self._client_port: int = 0
-        self._connected_ip: str = ""
-        self._connected_port: int = 0
         self._reconnect_attempt: int = 0
         self._reconnect_after: float = 0.0
         self._serial_read_attempted: bool = False
