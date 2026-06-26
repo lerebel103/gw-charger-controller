@@ -41,24 +41,33 @@ class TestEVChargerModbusClient:
     def test_config_changed_ip_changed(self):
         state = self._make_state()
         ec = EVChargerModbusClient(state)
-        ec._connected_ip = "192.168.1.20"
-        ec._connected_port = 502
+        ec._client = MagicMock()
+        ec._client_ip = "192.168.1.20"
+        ec._client_port = 502
         state.ev_charger_ip = "10.0.0.1"
         assert ec._config_changed() is True
 
     def test_config_changed_port_changed(self):
         state = self._make_state()
         ec = EVChargerModbusClient(state)
-        ec._connected_ip = "192.168.1.20"
-        ec._connected_port = 502
+        ec._client = MagicMock()
+        ec._client_ip = "192.168.1.20"
+        ec._client_port = 502
         state.ev_charger_port = 503
         assert ec._config_changed() is True
 
     def test_config_changed_false_when_same_params(self):
         state = self._make_state()
         ec = EVChargerModbusClient(state)
-        ec._connected_ip = "192.168.1.20"
-        ec._connected_port = 502
+        ec._client = MagicMock()
+        ec._client_ip = "192.168.1.20"
+        ec._client_port = 502
+        assert ec._config_changed() is False
+
+    def test_config_changed_false_without_client(self):
+        state = self._make_state()
+        ec = EVChargerModbusClient(state)
+        state.ev_charger_ip = "10.0.0.1"
         assert ec._config_changed() is False
 
     # --- connected property ---
@@ -663,9 +672,11 @@ class TestEVChargerModbusClient:
         ec = EVChargerModbusClient(state)
         mock_client = MagicMock()
         ec._client = mock_client
+        ec._consecutive_read_failures = 2
         await ec._close()
         mock_client.close.assert_called_once()
         assert ec._client is None
+        assert ec._consecutive_read_failures == 0
 
     # --- read() ---
 
@@ -688,12 +699,14 @@ class TestEVChargerModbusClient:
     async def test_read_skips_when_not_connected(self):
         """read() is a no-op when not connected."""
         state = self._make_state()
+        state.ev_comm_healthy = True
         ec = EVChargerModbusClient(state)
 
         with patch.object(ec, "_read_registers", new_callable=AsyncMock) as mock_rr:
             await ec.read()
 
         mock_rr.assert_not_awaited()
+        assert state.ev_comm_healthy is False
 
     @pytest.mark.asyncio
     async def test_read_marks_comms_unhealthy_on_error(self):

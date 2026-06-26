@@ -261,6 +261,10 @@ _ECO_DAY_HANDLER = EcoDayModeHandler()
 
 def resolve_mode_handler(loop: ModeLoopProtocol) -> ModeSetpointHandler:
     """Resolve the top-level mode strategy for the current loop snapshot."""
+    mode = loop._state.charge_mode
+    if mode == "Standby":
+        return _STANDBY_HANDLER
+
     if not loop._state.ev_connected or not loop._state.ev_comm_healthy:
         return _NO_VEHICLE_HANDLER
 
@@ -269,11 +273,8 @@ def resolve_mode_handler(loop: ModeLoopProtocol) -> ModeSetpointHandler:
     if ev_soc is not None and ev_soc >= (loop._state.ev_max_soc_pct - margin):
         return _MAX_SOC_BLOCKED_HANDLER
 
-    mode = loop._state.charge_mode
     if mode == "Manual":
         return _MANUAL_HANDLER
-    if mode == "Standby":
-        return _STANDBY_HANDLER
 
     if not loop._victron_client.connected:
         return _ECO_VICTRON_DOWN_HANDLER

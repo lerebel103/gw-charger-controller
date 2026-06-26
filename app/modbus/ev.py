@@ -57,6 +57,8 @@ class EVChargerModbusClient:
     def __init__(self, state: AppState) -> None:
         self._state = state
         self._client: AsyncModbusTcpClient | None = None
+        self._client_ip: str = ""
+        self._client_port: int = 0
         self._connected_ip: str = ""
         self._connected_port: int = 0
         self._reconnect_attempt: int = 0
@@ -76,11 +78,12 @@ class EVChargerModbusClient:
         """Check connection and reconnect if needed. Non-blocking single attempt."""
         if self._config_changed():
             await self._close()
-            self._connected_ip = ""
-            self._connected_port = 0
 
         if self.connected:
             return
+
+        # While disconnected (or reconnecting), status must be treated as stale.
+        self._state.ev_comm_healthy = False
 
         ip = self._state.ev_charger_ip
         port = self._state.ev_charger_port
@@ -88,6 +91,8 @@ class EVChargerModbusClient:
             return
 
         if self._client is None:
+            self._client_ip = ip
+            self._client_port = port
             self._client = AsyncModbusTcpClient(
                 ip,
                 port=port,
@@ -132,6 +137,7 @@ class EVChargerModbusClient:
     async def read(self) -> None:
         """Read all registers and update AppState."""
         if not self.connected:
+            self._state.ev_comm_healthy = False
             return
         try:
             await self._read_registers()
@@ -431,7 +437,9 @@ class EVChargerModbusClient:
     # ------------------------------------------------------------------
 
     def _config_changed(self) -> bool:
-        return self._state.ev_charger_ip != self._connected_ip or self._state.ev_charger_port != self._connected_port
+        if self._client is None:
+            return False
+        return self._state.ev_charger_ip != self._client_ip or self._state.ev_charger_port != self._client_port
 
     def _schedule_retry(self) -> None:
         import time as _t
@@ -446,6 +454,9 @@ class EVChargerModbusClient:
             if inspect.isawaitable(maybe_awaitable):
                 await maybe_awaitable
             self._client = None
+        self._client_ip = ""
+        self._client_port = 0
+        self._consecutive_read_failures = 0
         self._state.ev_comm_healthy = False
         self._serial_read_attempted = False
 

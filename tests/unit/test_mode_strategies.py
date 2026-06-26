@@ -32,6 +32,11 @@ class TestResolveModeHandler:
 
         assert resolve_mode_handler(loop).name == "standby"
 
+    def test_standby_precedence_when_ev_comms_unhealthy(self):
+        loop = make_ns_loop(AppState(ev_connected=True, ev_comm_healthy=False, charge_mode="Standby"))
+
+        assert resolve_mode_handler(loop).name == "standby"
+
     def test_victron_down_returns_dedicated_handler(self):
         loop = make_ns_loop(AppState(ev_connected=True, charge_mode="Eco"), victron_connected=False)
 
