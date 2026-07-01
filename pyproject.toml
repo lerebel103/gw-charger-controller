@@ -14,11 +14,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "hypothesis==6.155.2",
-    "pytest==9.1.0",
+    "hypothesis==6.155.7",
+    "pytest==9.1.1",
     "pytest-asyncio==1.4.0",
     "pytest-cov",
-    "ruff==0.15.17",
+    "ruff==0.15.20",
 ]
 
 [tool.ruff]
