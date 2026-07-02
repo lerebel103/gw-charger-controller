@@ -2,6 +2,7 @@
 
 import inspect
 import logging
+import time as _t
 
 from pymodbus.client import AsyncModbusTcpClient
 from pymodbus.exceptions import ModbusException
@@ -37,6 +38,11 @@ _REG_CHARGER_ENABLE = 10060
 _RAW_SETPOINT_MIN = 44  # practical minimum to reliably start charging (= 4.4 kW)
 _RAW_RUNTIME_SETPOINT_MIN = 42  # documented physical minimum (= 4.2 kW)
 _RAW_SETPOINT_MAX = 220  # 22.0 kW
+_RECONNECT_DELAY_S = 1.0
+_RECONNECT_DELAY_MAX_S = 60.0
+_CONNECT_TIMEOUT_S = 3.0
+_READ_RETRIES = 3
+_MAX_CONSECUTIVE_READ_FAILURES = 3  # force reconnect after this many consecutive read errors
 
 
 class EVChargerModbusClient:
@@ -51,11 +57,12 @@ class EVChargerModbusClient:
     def __init__(self, state: AppState) -> None:
         self._state = state
         self._client: AsyncModbusTcpClient | None = None
-        self._connected_ip: str = ""
-        self._connected_port: int = 0
+        self._client_ip: str = ""
+        self._client_port: int = 0
         self._reconnect_attempt: int = 0
         self._reconnect_after: float = 0.0
         self._serial_read_attempted: bool = False
+        self._consecutive_read_failures: int = 0
 
     @property
     def connected(self) -> bool:
@@ -67,28 +74,39 @@ class EVChargerModbusClient:
 
     async def ensure_connected(self) -> None:
         """Check connection and reconnect if needed. Non-blocking single attempt."""
-        if self.connected and not self._config_changed():
-            return
-
         if self._config_changed():
             await self._close()
+
+        if self.connected:
+            return
+
+        # While disconnected (or reconnecting), status must be treated as stale.
+        self._state.ev_comm_healthy = False
 
         ip = self._state.ev_charger_ip
         port = self._state.ev_charger_port
         if not ip:
             return
 
-        import time as _t
+        if self._client is None:
+            self._client_ip = ip
+            self._client_port = port
+            self._client = AsyncModbusTcpClient(
+                ip,
+                port=port,
+                reconnect_delay=_RECONNECT_DELAY_S,
+                reconnect_delay_max=_RECONNECT_DELAY_MAX_S,
+                timeout=_CONNECT_TIMEOUT_S,
+                retries=_READ_RETRIES,
+            )
 
         now = _t.monotonic()
         if now < self._reconnect_after:
             return
 
         try:
-            client = AsyncModbusTcpClient(ip, port=port)
-            connected = await client.connect()
+            connected = await self._client.connect()
             if connected:
-                self._client = client
                 self._connected_ip = ip
                 self._connected_port = port
                 self._reconnect_attempt = 0
@@ -115,16 +133,24 @@ class EVChargerModbusClient:
     # ------------------------------------------------------------------
 
     async def read(self) -> None:
-        """Read all registers and update AppState. Closes connection on error."""
+        """Read all registers and update AppState."""
         if not self.connected:
+            self._state.ev_comm_healthy = False
             return
         try:
             await self._read_registers()
+            self._consecutive_read_failures = 0
+            self._state.ev_comm_healthy = True
+            self._state.ev_last_read_ok_at = _t.monotonic()
             _throttle.clear("ev_read_fail")
             _throttle.reset("ev_connected")
         except (ModbusException, OSError) as exc:
+            self._consecutive_read_failures += 1
+            self._state.ev_comm_healthy = False
+            self._state.ev_last_read_error_at = _t.monotonic()
             _throttle.warning("ev_read_fail", "EV charger read failed: %s", exc)
-            await self._close()
+            if self._consecutive_read_failures >= _MAX_CONSECUTIVE_READ_FAILURES:
+                await self._close()
 
     # ------------------------------------------------------------------
     # Write
@@ -407,7 +433,9 @@ class EVChargerModbusClient:
     # ------------------------------------------------------------------
 
     def _config_changed(self) -> bool:
-        return self._state.ev_charger_ip != self._connected_ip or self._state.ev_charger_port != self._connected_port
+        if self._client is None:
+            return False
+        return self._state.ev_charger_ip != self._client_ip or self._state.ev_charger_port != self._client_port
 
     def _schedule_retry(self) -> None:
         import time as _t
@@ -422,6 +450,10 @@ class EVChargerModbusClient:
             if inspect.isawaitable(maybe_awaitable):
                 await maybe_awaitable
             self._client = None
+        self._client_ip = ""
+        self._client_port = 0
+        self._consecutive_read_failures = 0
+        self._state.ev_comm_healthy = False
         self._serial_read_attempted = False
 
     async def disconnect(self) -> None:

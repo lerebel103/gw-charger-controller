@@ -41,24 +41,33 @@ class TestEVChargerModbusClient:
     def test_config_changed_ip_changed(self):
         state = self._make_state()
         ec = EVChargerModbusClient(state)
-        ec._connected_ip = "192.168.1.20"
-        ec._connected_port = 502
+        ec._client = MagicMock()
+        ec._client_ip = "192.168.1.20"
+        ec._client_port = 502
         state.ev_charger_ip = "10.0.0.1"
         assert ec._config_changed() is True
 
     def test_config_changed_port_changed(self):
         state = self._make_state()
         ec = EVChargerModbusClient(state)
-        ec._connected_ip = "192.168.1.20"
-        ec._connected_port = 502
+        ec._client = MagicMock()
+        ec._client_ip = "192.168.1.20"
+        ec._client_port = 502
         state.ev_charger_port = 503
         assert ec._config_changed() is True
 
     def test_config_changed_false_when_same_params(self):
         state = self._make_state()
         ec = EVChargerModbusClient(state)
-        ec._connected_ip = "192.168.1.20"
-        ec._connected_port = 502
+        ec._client = MagicMock()
+        ec._client_ip = "192.168.1.20"
+        ec._client_port = 502
+        assert ec._config_changed() is False
+
+    def test_config_changed_false_without_client(self):
+        state = self._make_state()
+        ec = EVChargerModbusClient(state)
+        state.ev_charger_ip = "10.0.0.1"
         assert ec._config_changed() is False
 
     # --- connected property ---
@@ -663,9 +672,11 @@ class TestEVChargerModbusClient:
         ec = EVChargerModbusClient(state)
         mock_client = MagicMock()
         ec._client = mock_client
+        ec._consecutive_read_failures = 2
         await ec._close()
         mock_client.close.assert_called_once()
         assert ec._client is None
+        assert ec._consecutive_read_failures == 0
 
     # --- read() ---
 
@@ -688,17 +699,22 @@ class TestEVChargerModbusClient:
     async def test_read_skips_when_not_connected(self):
         """read() is a no-op when not connected."""
         state = self._make_state()
+        state.ev_comm_healthy = True
         ec = EVChargerModbusClient(state)
 
         with patch.object(ec, "_read_registers", new_callable=AsyncMock) as mock_rr:
             await ec.read()
 
         mock_rr.assert_not_awaited()
+        assert state.ev_comm_healthy is False
 
     @pytest.mark.asyncio
-    async def test_read_closes_on_error(self):
-        """read() closes the connection on ModbusException."""
+    async def test_read_marks_comms_unhealthy_on_error(self):
+        """read() marks EV comms unhealthy without force-closing the client below threshold."""
         state = self._make_state()
+        state.ev_connected = True
+        state.ev_charger_status = 3
+        state.ev_charger_status_enum = ChargerStatus.CHARGING_IN_PROGRESS
         ec = EVChargerModbusClient(state)
 
         mock_client = AsyncMock()
@@ -710,7 +726,35 @@ class TestEVChargerModbusClient:
         with patch.object(ec, "_read_registers", side_effect=ModbusException("fail")):
             await ec.read()
 
+        assert ec._client is mock_client
+        assert state.ev_comm_healthy is False
+        assert state.ev_connected is True
+        assert state.ev_charger_status == 3
+        assert state.ev_charger_status_enum == ChargerStatus.CHARGING_IN_PROGRESS
+        assert state.ev_last_read_error_at is not None
+
+    @pytest.mark.asyncio
+    async def test_read_force_closes_after_max_consecutive_failures(self):
+        """read() closes the connection after _MAX_CONSECUTIVE_READ_FAILURES."""
+        from app.modbus.ev import _MAX_CONSECUTIVE_READ_FAILURES
+
+        state = self._make_state()
+        ec = EVChargerModbusClient(state)
+
+        mock_client = AsyncMock()
+        mock_client.connected = True
+        mock_client.close = AsyncMock()
+        ec._client = mock_client
+
+        from pymodbus.exceptions import ModbusException
+
+        for _ in range(_MAX_CONSECUTIVE_READ_FAILURES):
+            mock_client.connected = True
+            with patch.object(ec, "_read_registers", side_effect=ModbusException("fail")):
+                await ec.read()
+
         assert ec._client is None
+        assert state.ev_comm_healthy is False
 
     @pytest.mark.asyncio
     async def test_retains_last_values_on_failure(self):

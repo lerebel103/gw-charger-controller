@@ -325,12 +325,17 @@ class MQTTClient:
         if topic_str == _VEHICLE_SOC_TOPIC:
             try:
                 soc = float(payload)
-            except ValueError, TypeError:
-                logger.warning("Invalid vehicle SOC value: %s", payload)
+            except ValueError:
+                _throttle.warning("vehicle_soc_invalid", "Invalid vehicle SOC value: %s", payload)
+                return
+            except TypeError:
+                _throttle.warning("vehicle_soc_invalid", "Invalid vehicle SOC value: %s", payload)
                 return
             if not (0 <= soc <= 100):
-                logger.warning("Vehicle SOC out of range [0-100]: %s", soc)
+                _throttle.warning("vehicle_soc_out_of_range", "Vehicle SOC out of range [0-100]: %s", soc)
                 return
+            _throttle.clear("vehicle_soc_invalid")
+            _throttle.clear("vehicle_soc_out_of_range")
             self._state.ev_soc_pct = soc
             self._state.ev_soc_pct_updated_at = time.monotonic()
             logger.debug("Received vehicle SOC: %.1f%%", soc)
@@ -367,7 +372,11 @@ class MQTTClient:
         elif vtype == "float":
             try:
                 val = float(payload)
-            except ValueError, TypeError:
+            except ValueError:
+                logger.warning("Invalid float value '%s' for %s", payload, attr)
+                await self._echo_current_value(topic_str, attr)
+                return
+            except TypeError:
                 logger.warning("Invalid float value '%s' for %s", payload, attr)
                 await self._echo_current_value(topic_str, attr)
                 return
@@ -381,7 +390,11 @@ class MQTTClient:
         elif vtype == "int":
             try:
                 val_i = int(float(payload))
-            except ValueError, TypeError:
+            except ValueError:
+                logger.warning("Invalid int value '%s' for %s", payload, attr)
+                await self._echo_current_value(topic_str, attr)
+                return
+            except TypeError:
                 logger.warning("Invalid int value '%s' for %s", payload, attr)
                 await self._echo_current_value(topic_str, attr)
                 return

@@ -20,4 +20,5 @@ _EV_MAX_SOC_MARGIN_PCT = 0.5  # only applied when ev_max_soc_pct == 100.0
 _STOPPING_MIN_DELAY_S = 10.0  # min time between stopping and stopped events
 _STOPPED_DELAY_S = 5.0  # delay after setpoint->0 before emitting stopped event
 _EV_SOC_STALE_S = 300.0  # 5 minutes - treat SOC as unavailable if not updated
+_EV_STATUS_STALE_S = 300.0  # 5 minutes - treat EV status as stale if not refreshed
 _EXTERNAL_STOP_CONFIRM_TICKS = 2  # consecutive non-charging status ticks before external stop

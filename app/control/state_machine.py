@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 
 from app.control.constants import (
     _EV_MAX_SOC_MARGIN_PCT,
+    _EV_STATUS_STALE_S,
     _EXTERNAL_STOP_CONFIRM_TICKS,
     _STOPPED_DELAY_S,
     _STOPPING_MIN_DELAY_S,
@@ -57,7 +58,12 @@ class ChargingSessionStateHandler(SessionStateHandler):
         state = loop._state
         wants_to_charge = setpoint > 0
 
-        if wants_to_charge and loop._last_positive_setpoint > 0 and machine.is_external_stop_candidate():
+        if (
+            wants_to_charge
+            and loop._last_positive_setpoint > 0
+            and machine.ev_status_is_trustworthy()
+            and machine.is_external_stop_candidate()
+        ):
             loop._external_stop_ticks += 1
             if loop._external_stop_ticks >= _EXTERNAL_STOP_CONFIRM_TICKS:
                 reason = machine.determine_stop_reason()
@@ -156,7 +162,7 @@ class StoppedPendingSessionStateHandler(SessionStateHandler):
         loop = machine.loop
         state = loop._state
         loop._external_stop_ticks = 0
-        if setpoint > 0:
+        if setpoint > 0 and machine.ev_status_is_trustworthy():
             applied = machine.transition_to_charging(setpoint, reset_stop_timers=True)
             machine.emit_started(applied, log_suffix=" (resumed from stopped_pending)")
             return applied
@@ -355,3 +361,12 @@ class ChargingStateMachine:
             ChargerStatus.START_FAILED,
             ChargerStatus.CHARGING_INTERRUPTED_INSUFFICIENT_PV_BATTERY,
         }
+
+    def ev_status_is_trustworthy(self) -> bool:
+        """Return True when EV status is healthy and has a recent successful refresh."""
+        if not self.loop._state.ev_comm_healthy:
+            return False
+        last_ok = self.loop._state.ev_last_read_ok_at
+        if last_ok is None:
+            return True
+        return (_time.monotonic() - last_ok) <= _EV_STATUS_STALE_S
