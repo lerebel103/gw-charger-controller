@@ -205,6 +205,7 @@ def limit_phase_current(loop: SamplingLoopProtocol, setpoint: float) -> float:
 
     # Compute per-phase headroom
     binding_phase = -1
+    binding_phase_current = 0.0
     min_headroom_a = float("inf")
 
     for idx in active_phases:
@@ -222,6 +223,7 @@ def limit_phase_current(loop: SamplingLoopProtocol, setpoint: float) -> float:
         if i_ev_max < min_headroom_a:
             min_headroom_a = i_ev_max
             binding_phase = idx
+            binding_phase_current = i_grid
 
     headroom_a = max(0.0, min_headroom_a)
 
@@ -249,14 +251,13 @@ def limit_phase_current(loop: SamplingLoopProtocol, setpoint: float) -> float:
 
     # FR-16: Throttled log when cap actively reduces setpoint
     phase_label = f"L{binding_phase + 1}" if binding_phase >= 0 else "?"
-    measured_current = means[binding_phase] if binding_phase >= 0 else 0.0
     _breaker_throttle.warning(
         "breaker_cap_active",
         "Breaker cap active: setpoint %.0f W → %.0f W (binding phase %s at %.1f A, limit %.1f A)",
         setpoint,
         capped_setpoint,
         phase_label,
-        measured_current,
+        binding_phase_current,
         safety_limit,
     )
 

@@ -48,6 +48,10 @@ def make_ns_loop(state: AppState, *, victron_connected: bool = True, **overrides
         _standby_write_quiet=False,
         _grid_power_samples=[],
         _battery_power_samples=[],
+        _l1_current_samples=[],
+        _l2_current_samples=[],
+        _l3_current_samples=[],
+        _breaker_cap_tripped=False,
         _start_time=_time.monotonic(),
     )
     for key, value in overrides.items():

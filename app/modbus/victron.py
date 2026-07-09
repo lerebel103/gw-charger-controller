@@ -167,6 +167,14 @@ class VictronModbusClient:
             self._state.victron_l3_current_a = None
             raise ModbusException(f"Grid voltage/current block read error: {vc_resp}")
 
+        if len(vc_resp.registers) < 6:
+            self._state.victron_l1_current_a = None
+            self._state.victron_l2_current_a = None
+            self._state.victron_l3_current_a = None
+            raise ModbusException(
+                f"Grid voltage/current block read incomplete: expected 6 registers, got {len(vc_resp.registers)}"
+            )
+
         # Even offsets = voltages (uint16, ÷10), odd offsets = currents (int16, ÷10)
         self._state.victron_l1_voltage_v = vc_resp.registers[0] / 10.0
         self._state.victron_l2_voltage_v = vc_resp.registers[2] / 10.0
@@ -184,8 +192,9 @@ class VictronModbusClient:
         self._state.victron_l2_current_a = raw_currents[1] if abs(raw_currents[1]) <= plausibility_limit else None
         self._state.victron_l3_current_a = raw_currents[2] if abs(raw_currents[2]) <= plausibility_limit else None
 
-        # TODO: Remove after initial testing — temporary info log for phase current validation
-        logger.info(
+        # TODO: Remove after initial testing — temporary throttled log for phase current validation
+        _throttle.info(
+            "phase_current_debug",
             "Grid phase current: L1=%.1f A, L2=%.1f A, L3=%.1f A",
             raw_currents[0],
             raw_currents[1],
