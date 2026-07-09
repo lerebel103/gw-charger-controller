@@ -229,7 +229,7 @@ class TestLimitPhaseCurrentBelowMinimum:
 class TestHysteresis:
     """FR-13: Once tripped, require P_cap > _MIN_CHARGE_W + margin to release."""
 
-    def test_holds_at_zero_when_tripped_and_pcap_below_threshold(self):
+    def test_releases_when_tripped_and_pcap_above_restart_threshold(self):
         state = _make_state(grid_currents=(10.0, 8.0, 6.0), ev_currents=(5.0, 5.0, 5.0))
         loop = make_ns_loop(state, _breaker_cap_tripped=True)
         _fill_phase_samples(loop, 10.0, 8.0, 6.0)

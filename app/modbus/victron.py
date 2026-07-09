@@ -93,6 +93,10 @@ class VictronModbusClient:
     async def read(self) -> None:
         """Read all registers and update AppState. Closes connection on error."""
         if not self.connected:
+            # FR-14: Prevent stale current data from being re-sampled while disconnected
+            self._state.victron_l1_current_a = None
+            self._state.victron_l2_current_a = None
+            self._state.victron_l3_current_a = None
             return
         try:
             await self._read_registers()

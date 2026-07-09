@@ -65,7 +65,8 @@ whole setpoint.
 ## 4. Functional Requirements
 
 - **FR-1** The controller SHALL read measured per-phase grid current from the Victron grid meter
-  every control cycle (except in Standby, per AGENTS.md), storing it in `AppState`.
+  every control cycle (including Standby — Victron is not the EV charger and AGENTS.md standby
+  rules only restrict EV charger Modbus interactions), storing it in `AppState`.
 - **FR-2** The controller SHALL compute, each cycle, a per-phase current headroom (using the
   30 s rolling mean of measured grid current) and derive a maximum allowable EV power `P_cap`
   that keeps every phase at or below `SAFETY · I_brk`.
@@ -351,7 +352,10 @@ wiring + publish mapping:
   During the first ~30 s after startup the buffer is partial; the mean of available samples is
   used (even a single sample enables the cap). The cap is only skipped when zero samples exist
   for an active phase (EC-1).
-- **EC-5** Standby mode → feature inactive along with all other EV/grid activity (NFR-3).
+- **EC-5** Standby mode → the breaker cap is naturally inactive (setpoint is already 0 in
+  standby, and `limit_phase_current` returns immediately for setpoint ≤ 0). Victron grid meter
+  reads and diagnostic sensor publishing (headroom %, grid current) continue in standby for
+  monitoring visibility. Only EV charger Modbus interactions are suppressed per AGENTS.md.
 - **EC-6** Single-phase switching mid-session → active phases re-detected each cycle from
   measured EV current (FR-8). Cap adapts within one cycle.
 - **EC-7** Solar/battery transient (cloud cover, battery hits floor SOC) → grid current spikes
