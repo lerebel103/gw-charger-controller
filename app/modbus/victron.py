@@ -199,8 +199,8 @@ class VictronModbusClient:
         # TODO: Remove after initial testing — temporary throttled log for phase current validation
         _throttle.info(
             "phase_current_debug",
-            "Grid phase current: L1=%.1f A, L2=%.1f A, L3=%.1f A",
-            raw_currents[0],
-            raw_currents[1],
-            raw_currents[2],
+            "Grid phase current: L1=%s A, L2=%s A, L3=%s A",
+            f"{self._state.victron_l1_current_a:.1f}" if self._state.victron_l1_current_a is not None else "REJECTED",
+            f"{self._state.victron_l2_current_a:.1f}" if self._state.victron_l2_current_a is not None else "REJECTED",
+            f"{self._state.victron_l3_current_a:.1f}" if self._state.victron_l3_current_a is not None else "REJECTED",
         )

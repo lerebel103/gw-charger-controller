@@ -203,6 +203,20 @@ def limit_phase_current(loop: SamplingLoopProtocol, setpoint: float) -> float:
     if not active_phases:
         active_phases = [0, 1, 2]
 
+    # Assign typed locals for the loop — None cases already filtered above
+    mean_vals: tuple[float, float, float] = (means[0], means[1], means[2])  # type: ignore[assignment]
+    raw_vals: tuple[float, float, float] = (
+        raw_grid_currents[0],  # type: ignore[assignment]
+        raw_grid_currents[1],  # type: ignore[assignment]
+        raw_grid_currents[2],  # type: ignore[assignment]
+    )
+    ev_vals: tuple[float, float, float] = (
+        ev_currents[0] if ev_currents[0] is not None else 0.0,
+        ev_currents[1] if ev_currents[1] is not None else 0.0,
+        ev_currents[2] if ev_currents[2] is not None else 0.0,
+    )
+    volt_vals: tuple[float, float, float] = (voltages[0], voltages[1], voltages[2])  # type: ignore[assignment]
+
     # Compute per-phase headroom
     binding_phase = -1
     binding_phase_current = 0.0
@@ -210,14 +224,8 @@ def limit_phase_current(loop: SamplingLoopProtocol, setpoint: float) -> float:
 
     for idx in active_phases:
         # FR-12: Instantaneous override — use raw if above 0.90 * I_brk
-        i_grid: float
-        if raw_grid_currents[idx] is not None and raw_grid_currents[idx] > instant_threshold:  # type: ignore[operator]
-            i_grid = raw_grid_currents[idx]  # type: ignore[assignment]
-        else:
-            i_grid = means[idx]  # type: ignore[assignment]
-
-        i_ev = ev_currents[idx] if ev_currents[idx] is not None else 0.0
-        i_base = i_grid - i_ev
+        i_grid = raw_vals[idx] if raw_vals[idx] > instant_threshold else mean_vals[idx]
+        i_base = i_grid - ev_vals[idx]
         i_ev_max = safety_limit - i_base
 
         if i_ev_max < min_headroom_a:
@@ -228,7 +236,7 @@ def limit_phase_current(loop: SamplingLoopProtocol, setpoint: float) -> float:
     headroom_a = max(0.0, min_headroom_a)
 
     # Compute P_cap from headroom and active phase voltages
-    voltage_sum = sum(voltages[idx] for idx in active_phases)  # type: ignore[misc]
+    voltage_sum = sum(volt_vals[idx] for idx in active_phases)
     p_cap = headroom_a * voltage_sum
 
     # FR-13: Restart hysteresis — if previously tripped, require extra margin

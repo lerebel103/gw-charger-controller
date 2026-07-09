@@ -123,14 +123,20 @@ class ControlLoop:
 
             # Compute breaker headroom diagnostics for snapshot (FR-11)
             safety_limit = _BREAKER_SAFETY_FRACTION * self._state.grid_breaker_limit_a
+            raw_currents = (
+                self._state.victron_l1_current_a,
+                self._state.victron_l2_current_a,
+                self._state.victron_l3_current_a,
+            )
             headroom_phases = (
                 (1, "l1_breaker_headroom_pct"),
                 (2, "l2_breaker_headroom_pct"),
                 (3, "l3_breaker_headroom_pct"),
             )
             for phase, attr in headroom_phases:
+                raw_i = raw_currents[phase - 1]
                 mean_i = mean_phase_current(self, phase)
-                if mean_i is not None and safety_limit > 0:
+                if raw_i is not None and mean_i is not None and safety_limit > 0:
                     headroom = (safety_limit - mean_i) / safety_limit * 100.0
                     setattr(self._state, attr, min(headroom, 100.0))
                 else:
