@@ -7,7 +7,7 @@ WORKDIR /app
 RUN groupadd -r lerebel103 && useradd -r -g lerebel103 lerebel103
 
 # Install uv for fast dependency management
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /usr/local/bin/uv
 
 # Copy dependency files first for better Docker layer caching
 COPY pyproject.toml uv.lock ./
