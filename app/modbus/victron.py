@@ -196,11 +196,10 @@ class VictronModbusClient:
         self._state.victron_l2_current_a = raw_currents[1] if abs(raw_currents[1]) <= plausibility_limit else None
         self._state.victron_l3_current_a = raw_currents[2] if abs(raw_currents[2]) <= plausibility_limit else None
 
-        # TODO: Remove after initial testing — temporary throttled log for phase current validation
-        _throttle.info(
-            "phase_current_debug",
-            "Grid phase current: L1=%s A, L2=%s A, L3=%s A",
-            f"{self._state.victron_l1_current_a:.1f}" if self._state.victron_l1_current_a is not None else "REJECTED",
-            f"{self._state.victron_l2_current_a:.1f}" if self._state.victron_l2_current_a is not None else "REJECTED",
-            f"{self._state.victron_l3_current_a:.1f}" if self._state.victron_l3_current_a is not None else "REJECTED",
-        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Grid phase current: L1=%s A, L2=%s A, L3=%s A",
+                f"{self._state.victron_l1_current_a:.1f}" if self._state.victron_l1_current_a is not None else "REJECTED",
+                f"{self._state.victron_l2_current_a:.1f}" if self._state.victron_l2_current_a is not None else "REJECTED",
+                f"{self._state.victron_l3_current_a:.1f}" if self._state.victron_l3_current_a is not None else "REJECTED",
+            )
