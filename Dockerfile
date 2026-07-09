@@ -6,16 +6,14 @@ WORKDIR /app
 # Create non-root user for security
 RUN groupadd -r lerebel103 && useradd -r -g lerebel103 lerebel103
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
+# Install uv for fast dependency management
+COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /usr/local/bin/uv
 
-# Copy requirements first for better Docker layer caching
-COPY requirements.txt .
+# Copy dependency files first for better Docker layer caching
+COPY pyproject.toml uv.lock ./
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Install production dependencies only (no dev group, no local project install)
+RUN uv sync --no-dev --frozen --no-install-project
 
 # Copy application source code
 COPY app/ ./app/
@@ -35,10 +33,7 @@ USER lerebel103
 ENV PYTHONPATH=/app
 
 # Default command - run with config from mounted volume
-CMD ["python", "-m", "app", "--config", "/etc/gw-evcharger-controller/config.yaml"]
-
-# Expose no ports (this is an MQTT client, not a server)
-# Health check could be added later if needed
+CMD [".venv/bin/python", "-m", "app", "--config", "/etc/gw-evcharger-controller/config.yaml"]
 
 # Labels for metadata
 LABEL maintainer="lerebel103"

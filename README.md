@@ -67,12 +67,11 @@ See **Configuration** below for required `config.yaml` fields.
 ### Alternative: Local Development Setup
 
 ```bash
-# Create a Python 3.14+ virtual environment
-python3.14 -m venv venv
-source venv/bin/activate
+# Install uv (https://docs.astral.sh/uv/getting-started/installation/)
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install dependencies
-pip install -e '.[dev]'
+# Install all dependencies (creates .venv automatically)
+uv sync --group dev
 
 # Run tests
 make test
