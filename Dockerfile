@@ -33,7 +33,7 @@ USER lerebel103
 ENV PYTHONPATH=/app
 
 # Default command - run with config from mounted volume
-CMD ["uv", "run", "python", "-m", "app", "--config", "/etc/gw-evcharger-controller/config.yaml"]
+CMD [".venv/bin/python", "-m", "app", "--config", "/etc/gw-evcharger-controller/config.yaml"]
 
 # Labels for metadata
 LABEL maintainer="lerebel103"
