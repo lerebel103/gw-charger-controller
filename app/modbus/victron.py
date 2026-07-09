@@ -197,9 +197,7 @@ class VictronModbusClient:
         self._state.victron_l3_current_a = raw_currents[2] if abs(raw_currents[2]) <= plausibility_limit else None
 
         if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(
-                "Grid phase current: L1=%s A, L2=%s A, L3=%s A",
-                f"{self._state.victron_l1_current_a:.1f}" if self._state.victron_l1_current_a is not None else "REJECTED",
-                f"{self._state.victron_l2_current_a:.1f}" if self._state.victron_l2_current_a is not None else "REJECTED",
-                f"{self._state.victron_l3_current_a:.1f}" if self._state.victron_l3_current_a is not None else "REJECTED",
-            )
+            l1 = f"{self._state.victron_l1_current_a:.1f}" if self._state.victron_l1_current_a is not None else "N/A"
+            l2 = f"{self._state.victron_l2_current_a:.1f}" if self._state.victron_l2_current_a is not None else "N/A"
+            l3 = f"{self._state.victron_l3_current_a:.1f}" if self._state.victron_l3_current_a is not None else "N/A"
+            logger.debug("Grid phase current: L1=%s A, L2=%s A, L3=%s A", l1, l2, l3)
