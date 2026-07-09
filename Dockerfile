@@ -12,8 +12,8 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /usr/local/bin/uv
 # Copy dependency files first for better Docker layer caching
 COPY pyproject.toml uv.lock ./
 
-# Install production dependencies only (no dev group)
-RUN uv sync --no-dev --frozen
+# Install production dependencies only (no dev group, no local project install)
+RUN uv sync --no-dev --frozen --no-install-project
 
 # Copy application source code
 COPY app/ ./app/
