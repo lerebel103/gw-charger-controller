@@ -33,9 +33,6 @@ def build_snapshot(loop: SnapshotLoopProtocol) -> StateSnapshot:
         ev_single_phase_switching_display=loop._state.ev_single_phase_switching_enum.display_name
         if loop._state.ev_single_phase_switching_enum is not None
         else None,
-        ev_max_grid_power_draw_w=(loop._state.ev_max_grid_power_draw_raw * 100.0)
-        if loop._state.ev_max_grid_power_draw_raw is not None
-        else None,
         ev_active_power_w=loop._state.ev_active_power_w,
         ev_session_energy_wh=loop._state.ev_session_energy_wh,
         ev_voltage_l1_v=loop._state.ev_voltage_l1_v,
@@ -50,6 +47,12 @@ def build_snapshot(loop: SnapshotLoopProtocol) -> StateSnapshot:
         l1_voltage_drop_pct=loop._state.l1_voltage_drop_pct,
         l2_voltage_drop_pct=loop._state.l2_voltage_drop_pct,
         l3_voltage_drop_pct=loop._state.l3_voltage_drop_pct,
+        l1_breaker_headroom_pct=loop._state.l1_breaker_headroom_pct,
+        l2_breaker_headroom_pct=loop._state.l2_breaker_headroom_pct,
+        l3_breaker_headroom_pct=loop._state.l3_breaker_headroom_pct,
+        victron_l1_current_a=loop._state.victron_l1_current_a,
+        victron_l2_current_a=loop._state.victron_l2_current_a,
+        victron_l3_current_a=loop._state.victron_l3_current_a,
         commanded_setpoint_w=loop._state.commanded_setpoint_w,
         uptime_s=round(_time.monotonic() - loop._start_time),
         timestamp=datetime.now(),  # noqa: DTZ005

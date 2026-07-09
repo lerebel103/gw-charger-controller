@@ -119,12 +119,10 @@ class TestVictronModbusClient:
         grid_resp = _make_response([500, 300, 65436])
         # Battery power = -200 (uint16: 0xFF38 = 65336), SOC = 75
         batt_resp = _make_response([65336, 75])
-        # Voltages: 2300 (230.0V), 2310 (231.0V), 2290 (229.0V)
-        v1_resp = _make_response([2300])
-        v2_resp = _make_response([2310])
-        v3_resp = _make_response([2290])
+        # Block read 2616-2621: V1=2300, I1=50, V2=2310, I2=30, V3=2290, I3=-20 (uint16: 65516)
+        vc_resp = _make_response([2300, 50, 2310, 30, 2290, 65516])
 
-        mock_client.read_holding_registers = AsyncMock(side_effect=[grid_resp, batt_resp, v1_resp, v2_resp, v3_resp])
+        mock_client.read_holding_registers = AsyncMock(side_effect=[grid_resp, batt_resp, vc_resp])
 
         await vc._read_registers()
 
@@ -136,6 +134,9 @@ class TestVictronModbusClient:
         assert state.victron_l1_voltage_v == 230.0
         assert state.victron_l2_voltage_v == 231.0
         assert state.victron_l3_voltage_v == 229.0
+        assert state.victron_l1_current_a == 5.0
+        assert state.victron_l2_current_a == 3.0
+        assert state.victron_l3_current_a == -2.0
 
     @pytest.mark.asyncio
     async def test_read_registers_grid_error_raises(self):

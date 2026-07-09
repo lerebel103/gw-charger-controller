@@ -24,10 +24,9 @@ _REG_GRID_L3_POWER = 822
 _REG_BATTERY_POWER = 842
 _REG_BATTERY_SOC = 843
 
-# Grid meter voltage registers (unit ID from state.victron_grid_meter_unit_id)
+# Grid meter voltage/current registers (unit ID from state.victron_grid_meter_unit_id)
+# Block read 2616-2621: L1V, L1I, L2V, L2I, L3V, L3I
 _REG_GRID_L1_VOLTAGE = 2616
-_REG_GRID_L2_VOLTAGE = 2618
-_REG_GRID_L3_VOLTAGE = 2620
 
 
 def _uint16_to_int16(value: int) -> int:
@@ -100,6 +99,10 @@ class VictronModbusClient:
             _throttle.clear("victron_read_fail")
             _throttle.reset("victron_connected")
         except (ModbusException, OSError) as exc:
+            # FR-14: Clear per-phase current on read failure to prevent stale safety data
+            self._state.victron_l1_current_a = None
+            self._state.victron_l2_current_a = None
+            self._state.victron_l3_current_a = None
             _throttle.warning("victron_read_fail", "Victron GX read failed: %s", exc)
             await self._close()
 
@@ -154,24 +157,37 @@ class VictronModbusClient:
 
         grid_meter_unit = self._state.victron_grid_meter_unit_id
 
-        v1_resp = await self._client.read_holding_registers(
-            address=_REG_GRID_L1_VOLTAGE, count=1, device_id=grid_meter_unit
+        # Block read: 2616-2621 (3 voltages + 3 currents interleaved)
+        vc_resp = await self._client.read_holding_registers(
+            address=_REG_GRID_L1_VOLTAGE, count=6, device_id=grid_meter_unit
         )
-        if v1_resp.isError():
-            raise ModbusException(f"Grid L1 voltage read error: {v1_resp}")
+        if vc_resp.isError():
+            self._state.victron_l1_current_a = None
+            self._state.victron_l2_current_a = None
+            self._state.victron_l3_current_a = None
+            raise ModbusException(f"Grid voltage/current block read error: {vc_resp}")
 
-        v2_resp = await self._client.read_holding_registers(
-            address=_REG_GRID_L2_VOLTAGE, count=1, device_id=grid_meter_unit
+        # Even offsets = voltages (uint16, ÷10), odd offsets = currents (int16, ÷10)
+        self._state.victron_l1_voltage_v = vc_resp.registers[0] / 10.0
+        self._state.victron_l2_voltage_v = vc_resp.registers[2] / 10.0
+        self._state.victron_l3_voltage_v = vc_resp.registers[4] / 10.0
+
+        # Decode signed currents with plausibility check (FR-15)
+        plausibility_limit = 2.0 * self._state.grid_breaker_limit_a
+        raw_currents = (
+            _uint16_to_int16(vc_resp.registers[1]) / 10.0,
+            _uint16_to_int16(vc_resp.registers[3]) / 10.0,
+            _uint16_to_int16(vc_resp.registers[5]) / 10.0,
         )
-        if v2_resp.isError():
-            raise ModbusException(f"Grid L2 voltage read error: {v2_resp}")
 
-        v3_resp = await self._client.read_holding_registers(
-            address=_REG_GRID_L3_VOLTAGE, count=1, device_id=grid_meter_unit
+        self._state.victron_l1_current_a = raw_currents[0] if abs(raw_currents[0]) <= plausibility_limit else None
+        self._state.victron_l2_current_a = raw_currents[1] if abs(raw_currents[1]) <= plausibility_limit else None
+        self._state.victron_l3_current_a = raw_currents[2] if abs(raw_currents[2]) <= plausibility_limit else None
+
+        # TODO: Remove after initial testing — temporary info log for phase current validation
+        logger.info(
+            "Grid phase current: L1=%.1f A, L2=%.1f A, L3=%.1f A",
+            raw_currents[0],
+            raw_currents[1],
+            raw_currents[2],
         )
-        if v3_resp.isError():
-            raise ModbusException(f"Grid L3 voltage read error: {v3_resp}")
-
-        self._state.victron_l1_voltage_v = v1_resp.registers[0] / 10.0
-        self._state.victron_l2_voltage_v = v2_resp.registers[0] / 10.0
-        self._state.victron_l3_voltage_v = v3_resp.registers[0] / 10.0

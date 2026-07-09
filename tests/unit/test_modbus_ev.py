@@ -433,38 +433,6 @@ class TestEVChargerModbusClient:
         await ec._read_registers()
         assert state.ev_total_energy_wh == 6553600.0
 
-    @pytest.mark.asyncio
-    async def test_read_registers_max_grid_power_draw_error_is_non_fatal(self):
-        state = self._make_state()
-        ec = EVChargerModbusClient(state)
-        mock_client = AsyncMock()
-        ec._client = mock_client
-
-        main_resp = _make_response([2280, 2290, 2270, 160, 155, 158, 110, 50, 3])
-        ct_resp = _make_response([2, 1])
-        te_resp = _make_response([0, 1500])
-        cc_resp = _make_response([2])
-
-        mock_client.read_holding_registers = AsyncMock(
-            side_effect=[
-                main_resp,
-                ct_resp,
-                te_resp,
-                cc_resp,
-                _make_response([1]),
-                _make_response([0]),
-                _make_response([50]),
-                _make_error_response(),
-            ]
-        )
-
-        await ec._read_registers()
-
-        assert state.ev_charger_status == 3
-        assert state.ev_total_energy_wh == 150000.0
-        assert state.ev_charger_setpoint_raw == 50
-        assert state.ev_max_grid_power_draw_raw is None
-
     # --- write_setpoint ---
 
     @pytest.mark.asyncio
@@ -607,37 +575,6 @@ class TestEVChargerModbusClient:
         assert ok is True
         mock_client.write_register.assert_called_once_with(address=10023, value=1, device_id=247)
         assert state.ev_single_phase_switching_enum == SinglePhaseSwitching.ENABLED
-
-    @pytest.mark.asyncio
-    async def test_write_max_grid_power_draw_success(self):
-        state = self._make_state()
-        ec = EVChargerModbusClient(state)
-
-        mock_client = AsyncMock()
-        mock_client.connected = True
-        mock_client.write_register = AsyncMock(return_value=_make_response([]))
-        ec._client = mock_client
-
-        ok = await ec.write_max_grid_power_draw(4200)
-
-        assert ok is True
-        mock_client.write_register.assert_called_once_with(address=10039, value=42, device_id=247)
-        assert state.ev_max_grid_power_draw_raw == 42
-
-    @pytest.mark.asyncio
-    async def test_read_max_grid_power_draw_success(self):
-        state = self._make_state()
-        ec = EVChargerModbusClient(state)
-
-        mock_client = AsyncMock()
-        mock_client.connected = True
-        mock_client.read_holding_registers = AsyncMock(return_value=_make_response([220]))
-        ec._client = mock_client
-
-        value_w = await ec.read_max_grid_power_draw()
-
-        assert value_w == 22000.0
-        assert state.ev_max_grid_power_draw_raw == 220
 
     # --- reconnect ---
 

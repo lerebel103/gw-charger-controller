@@ -39,6 +39,10 @@ class SamplingLoopProtocol(Protocol):
     _state: AppState
     _grid_power_samples: list[tuple[float, float]]
     _battery_power_samples: list[tuple[float, float]]
+    _l1_current_samples: list[tuple[float, float]]
+    _l2_current_samples: list[tuple[float, float]]
+    _l3_current_samples: list[tuple[float, float]]
+    _breaker_cap_tripped: bool
 
 
 class ModeLoopProtocol(SamplingLoopProtocol, Protocol):
