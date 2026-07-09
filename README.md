@@ -1,87 +1,42 @@
-# Goodwe HCA G2 EV Charger Controller
+# GW Charger Controller
 
-[![GitHub](https://img.shields.io/badge/GitHub-Repository-181717?logo=github)](https://github.com/lerebel103/gw-charger-controller)
-[![Docker Hub](https://img.shields.io/badge/Docker%20Hub-lerebel103%2Fgw--charger--controller-2496ED?logo=docker)](https://hub.docker.com/r/lerebel103/gw-charger-controller)
+[![Docker Hub](https://img.shields.io/badge/Docker%20Hub-lerebel103%2Fgw--evcharger--controller-2496ED?logo=docker)](https://hub.docker.com/r/lerebel103/gw-evcharger-controller)
 [![Release](https://img.shields.io/github/v/release/lerebel103/gw-charger-controller?label=Release)](https://github.com/lerebel103/gw-charger-controller/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/license/mit)
 
-A Docker-based integration that bridges a GW22K-HCA-20 EV charger and a Victron GX device (both over Modbus TCP) with Home Assistant via MQTT discovery.
+An intelligent EV charging controller that bridges a **GoodWe GW22K-HCA-20** charger and a **Victron GX** energy system with **Home Assistant** via MQTT. It dynamically adjusts the charge power setpoint to maximise solar self-consumption while protecting your main breaker from overload.
 
-## Features
+## What it does
 
-- **Three charge modes** — Eco, Manual, and Standby
-- **Rolling mean start/stop** — Eco mode uses configurable rolling averages (1–10 min) to decide when to start and stop charging, preventing rapid cycling
-- **Full HA integration** — all sensors, controls, and configuration exposed via MQTT discovery (no manual HA YAML needed)
-- **All 3-phase** voltage, current, and voltage drop sensors
-- **Total lifetime energy** tracking (register 10065, U32)
-- **Runtime configuration** — all settings adjustable from HA without restarting
-- **Runtime charger memory controls** from HA for advanced charging mode, plug-and-charge auto start, single-phase switching, and max grid power draw
-- **Diagnostics** for charger communication link bitfield and per-link online states
+- Reads real-time solar, battery, and grid data from the Victron GX over Modbus TCP
+- Reads charger status and per-phase current/voltage from the GW22K over Modbus TCP
+- Computes an optimal charge setpoint every few seconds based on the active charge mode
+- Applies a per-phase breaker protection cap to prevent main breaker overload
+- Exposes all sensors, controls, and configuration to Home Assistant via MQTT discovery
 
-## Installation and Configuration (Docker First)
+## Charge Modes
 
-Docker Compose is the recommended and first-class way to run this project.
+| Mode | Behaviour |
+|------|-----------|
+| **Eco** | Maximises solar self-consumption. Daytime: ramps EV power up/down to track solar surplus. Night: draws from home battery at a fixed rate to reach a minimum EV SOC by morning. |
+| **Manual** | Charges at a fixed user-configured power (4.4–22 kW). Resets to Eco on unplug. |
+| **Standby** | Stops charging and suppresses all EV charger communication. |
 
-### Prerequisites
+## Breaker Protection
 
-- **Docker & Docker Compose**
-- **MQTT broker** (Home Assistant's built-in broker works fine)
-- **GW22K-HCA-20 EV charger** with Modbus TCP enabled
-- **Victron GX** device (Color Control GX, Venus GX, CCGX, or similar) with Modbus TCP
-- All three on the same network with static IPs (or DHCP reservations)
+An always-on safety mechanism that dynamically caps the charge setpoint to keep every grid phase below 80% of the configured breaker rating. Uses a 30s rolling mean for smooth operation and an instantaneous override at 90% for fast transients (e.g. solar dropout). See [docs/grid-power-scaling.md](docs/grid-power-scaling.md) for the full algorithm.
 
-### Recommended Setup with Docker Compose
-
-The repository already includes a ready-to-use compose example in `docker-compose.yml`.
+## Quick Start
 
 ```bash
-# Clone the repository
 git clone https://github.com/lerebel103/gw-charger-controller.git
 cd gw-charger-controller
 
-# Create your runtime config
 cp config.yaml.example config.yaml
-# Edit with your MQTT broker and device IPs
-nano config.yaml
+# Edit config.yaml with your MQTT broker and device IPs
 
-# Start using the included compose file
 docker compose up -d
-
-# Follow logs
 docker compose logs -f gw-evcharger-controller
-
-# Stop
-docker compose down
-```
-
-You can also use the convenience targets:
-
-```bash
-make up
-make logs
-make down
-```
-
-See **Configuration** below for required `config.yaml` fields.
-
-### Alternative: Local Development Setup
-
-```bash
-# Create a Python 3.14+ virtual environment
-python3.14 -m venv venv
-source venv/bin/activate
-
-# Install dependencies
-pip install -e '.[dev]'
-
-# Run tests
-make test
-
-# Run linting
-make lint
-
-# Format code
-make format
 ```
 
 ## Configuration
@@ -94,308 +49,59 @@ mqtt_port: 1883
 mqtt_username: "ha_user"
 mqtt_password: "secret"
 ev_charger_ip: "192.168.1.20"
-ev_charger_port: 502
 victron_ip: "192.168.1.30"
-victron_port: 502
 ```
 
-### Runtime Configuration
+All other settings (charge mode, thresholds, timings, breaker limit) are configurable from Home Assistant at runtime and persisted automatically.
 
-All other settings (charge mode, discharge window, floor %, max charge power, min EV SOC, eco mean window, etc.) are configurable from Home Assistant and persisted automatically. Changes take effect immediately without restarting.
+## Prerequisites
 
-### Power Correction
+- Docker and Docker Compose
+- MQTT broker (Home Assistant's built-in Mosquitto works)
+- GW22K-HCA-20 with Modbus TCP enabled
+- Victron GX device with Modbus TCP enabled
+- All devices on the same network
 
-This charger appears to under-read current and active power by about 5.6%. Use `correction_pct` (0.0–10.0%, default 5.6%) to scale those reported values so Home Assistant readings are closer to real measurements. The correction is applied before publishing values to Home Assistant.
+## Home Assistant Integration
 
-## Charge Modes
+The controller auto-discovers in HA via MQTT — no manual YAML needed. You get:
 
-### Eco Mode
+- **Sensors**: charger power, per-phase voltage/current, grid current, breaker headroom %, EV SOC, session energy, total energy, voltage drop, uptime
+- **Controls**: charge mode select, manual power slider, EV SOC targets, breaker limit, discharge window times, all eco thresholds
+- **Diagnostics**: charger status, communication link states, serial number
+- **Events**: charging started/stopping/stopped with reason and energy totals
 
-Eco mode maximises the use of free solar energy. It behaves differently depending on the time of day:
+## Vehicle SOC
 
-**Outside the battery discharge window** (daytime):
+The GW22K doesn't expose EV battery SOC over Modbus. Feed it externally via MQTT:
 
-The controller uses three solar battery SOC thresholds to determine charging behaviour. These create distinct operating bands with hysteresis to prevent oscillation:
+```
+Topic: ev_charger/vehicle/soc/set
+Payload: 72
+```
 
-| Solar Battery SOC | Charging Behaviour | State |
-|---|---|---|
-| Below **Eco Day Min Solar Batt SOC** (default 75%) | Charging stops entirely (setpoint → 0). Solar battery gets full priority. | `ECO_DAY_SOC_GATE` |
-| Between **Min Solar Batt SOC** and **Solar Batt Full Exit SOC** (75%–90%) | Charges at minimum power (4400 W) only, if start conditions are met. No ramping. | `ECO_DAY_MINIMUM` |
-| Between **Solar Batt Full Exit SOC** and **Solar Batt Full SOC** (90%–96%) | Depends on previous state (hysteresis — see below). | — |
-| Above **Eco Day Solar Batt Full SOC** (default 96%) | Full ramp mode. Setpoint increases to match available solar export. | `ECO_DAY_RAMPING` |
-
-**Start conditions (required before any eco day charging begins):**
-
-EV charging will only start when `_eco_charging` transitions from `False` to `True`. This requires ALL of:
-- Vehicle is connected
-- Solar battery SOC ≥ `eco_day_min_solar_battery_soc_pct` (75%)
-- Not in cooldown period (5 min after a stop)
-
-AND at least ONE of these trigger conditions (based on rolling means):
-- **Grid export**: mean grid power ≤ `eco_day_grid_export_charge_start_w` (default -1400 W, sustained export to grid)
-- **Solar battery charging surplus**: mean solar battery power ≥ `eco_day_solar_battery_charge_start_w` (default 5500 W) — the solar battery is absorbing enough power that there's clearly surplus available to share with the EV
-
-On vehicle disconnect, `_eco_charging` is reset to `False`, so start conditions must be re-evaluated on the next connection.
-
-**Hysteresis behaviour (90%–96% band):**
-- If the solar battery SOC rises above 96%, the controller latches into ramping mode.
-- Once ramping, it stays ramping even if SOC dips back into the 90%–96% range (e.g. from the charger drawing power).
-- Ramping only exits when SOC drops below 90%, at which point it falls back to minimum charging (4400 W).
-- This prevents the setpoint from oscillating between ramping and minimum when the solar battery hovers near full.
-
-**Ramp mode details:**
-- A rolling mean of grid power is computed over a configurable window (default 5 min).
-- The setpoint ramps up from minimum, using solar battery power as feedback to find the max sustainable rate.
-- If the solar battery starts discharging, the setpoint is reduced to prevent solar battery drain.
-- Charging stops when the mean solar battery power indicates sustained discharge.
-- After stopping, a 5-minute cooldown prevents restarting to avoid rapid on/off cycling from clouds or transient house loads.
-
-**Inside the battery discharge window** (default 23:00–06:00, configurable):
-- Charges at a fixed rate (Solar Battery Max EV Charge Power, default 5000 W), drawing from the home battery and grid as needed.
-- If the home battery SOC drops to the discharge floor and the EV has reached its minimum SOC target, charging stops.
-- If the EV hasn't reached its minimum SOC, charging continues even if that means importing from the grid.
-
-#### Eco Day Configuration Parameters
-
-| HA Entity Name | Config Key | Default | Range | Description |
-|---|---|---|---|---|
-| Eco Day Min Solar Batt SOC | `eco_day_min_solar_battery_soc_pct` | 75% | 0–100% | Below this SOC, EV charging stops entirely. Solar battery gets full priority. |
-| Eco Day Solar Batt Full Exit SOC | `eco_day_solar_battery_full_exit_pct` | 90% | 0–100% | Once ramping, the controller drops back to minimum charging when SOC falls below this. |
-| Eco Day Solar Batt Full SOC | `eco_day_solar_battery_full_pct` | 96% | 80–100% | SOC threshold to enter ramp mode. Must be higher than the exit threshold. |
-| Eco Day Solar Batt Charge Start | `eco_day_solar_battery_charge_start_w` | 5500 W | 2000–8000 W | If mean solar battery charging power exceeds this, EV charging starts (alternative to grid export trigger). |
-| Eco Day Ramp Step | `eco_day_ramp_step_w` | 200 W | 10–500 W | How much the setpoint increases/decreases per control loop cycle during ramping. |
-| Eco Day Grid Export Charge Start | `eco_day_grid_export_charge_start_w` | -1400 W | -5000 to -100 W | Mean grid power must drop to this value (export) to trigger EV charging start. More negative = more export required. |
-| Eco Mean Window | `eco_mean_window_minutes` | 5 min | 1–10 min | Rolling average window for grid and battery power used in start/stop decisions. |
-| Solar Batt Pwr Lim (day) | `solar_battery_day_power_limit_w` | -500 W | -10000–0 W | If mean solar battery power drops below this (discharging), eco day charging stops. |
-| Control Loop Interval | `control_loop_interval_s` | 5 s | 1–60 s | How often the control loop runs. Affects ramp speed (ramp step × interval). |
-
-### Manual Mode
-
-Charges at a fixed power level configured via Home Assistant (4200–22000 W). Intended for one-off fast charges. Automatically resets to Eco mode when the EV is unplugged, so you don't accidentally leave it in Manual for the next session.
-
-### Standby Mode
-
-Stops EV charging and then suppresses regular EV Modbus connections/reads/writes. Use this to temporarily disable automated charging without changing other settings.
-
-Standby includes a narrow user-initiated exception path for runtime charger memory controls only:
-- Advanced Charging Mode (register 10032)
-- Plug and Charge Auto Start (register 10019)
-- Single Phase Switching (register 10023)
-- Max Grid Power Draw (register 10039)
-
-These standby exceptions are on-demand only and use a short-lived session (connect → write → readback → disconnect). See [AGENTS.md](AGENTS.md) for implementation details.
-
-## Runtime EV Controls
-
-The following controls are exposed in Home Assistant and are not persisted to config.yaml (they are charger runtime memory values):
-
-- **Advanced Charging Mode** (`select`)
-   - Fast charging
-   - PV charging
-   - PV + battery hybrid charging
-- **Plug and Charge Auto Start** (`switch`)
-   - Off
-   - On
-- **Single Phase Switching** (`switch`)
-   - Off
-   - On
-- **Max Grid Power Draw** (`number`)
-   - 4200-22000 W (register 10039 raw range 42-220)
-
-Outside standby these values are polled and reflected continuously. In standby they can still be changed via the exception path above.
-
-## Diagnostics
-
-Additional diagnostics are exposed to Home Assistant:
-
-- **Charger Connection Status** (`number`, raw U16 from register 10018)
-- **Charger Serial Number** (`text`, from register 10040 ASCII)
-- **Per-bit connectivity binary sensors** from register 10018:
-  - Wi-Fi router connected
-  - IoT cloud connected
-  - Inverter online
-  - MID meter online
-  - GW meter online
-  - EMS online
-
-The charger serial number is read once at startup/connection and used as Home Assistant device metadata (`device.serial_number`) in MQTT discovery payloads.
+Automate this from your car integration in Home Assistant. If no update arrives within 5 minutes, SOC is treated as unavailable.
 
 ## Development
 
-### Make Targets
-
 ```bash
-make help       # Show all available targets
-make test       # Run unit and property tests
-make test-cov   # Run tests with coverage report
-make lint       # Lint with ruff
-make format     # Auto-format and fix with ruff
-make build      # Build local Docker image
-make build-multi # Build multi-arch (amd64 + arm64) and push to registry
-make up         # Start with docker-compose (requires config.yaml)
-make down       # Stop docker-compose containers
-make logs       # Tail logs from running container
-make clean      # Remove Docker images and containers
+# Install uv (https://docs.astral.sh/uv/)
+uv sync --group dev
+
+# Run tests
+uv run pytest tests/ -v
+
+# Lint + format
+uv run ruff check app/ tests/
+uv run ruff format app/ tests/
 ```
 
-### Testing
-
-The project uses `pytest` for unit testing with high coverage:
-
-```bash
-# Run all tests
-pytest tests/
-
-# Run with coverage
-pytest tests/ --cov=app --cov-report=term-missing
-
-# Run specific test file
-pytest tests/unit/test_control_loop.py -v
-
-# Run matching a pattern
-pytest tests/ -k "eco" -v
-```
-
-**Test organization:**
-- `tests/unit/` — Unit tests for individual modules
-- `tests/unit/helpers.py` — Shared test fixtures (fake loop, mock clients)
-- No external dependencies required (mocked Modbus and MQTT)
-
-### Code Organization
-
-See [AGENTS.md - Project Architecture](AGENTS.md#project-architecture) for a detailed overview of module responsibilities and data flow.
-
-The codebase is split by domain to keep runtime behavior and integration boundaries clear:
-
-- **`app/control/`** — Core charging policy and orchestration
-  - `loop.py`: Master control loop (reads state, computes setpoint, publishes)
-  - `state_machine.py`: Session and mode state transitions
-  - `mode_strategies.py`: OO charge mode handlers (Eco, Manual, Standby)
-  - `power_utils.py`: Rolling averages, grid fallback, battery limits
-  - `snapshot.py`: State snapshot building for MQTT
-  - `protocols.py`: Structural type hints for all helper functions
-  - `constants.py`: Tunable thresholds (min/max power, cooldowns, etc.)
-
-- **`app/modbus/`** — Device protocol clients
-  - `ev.py`: GW22K-HCA-20 charger client (register I/O, state decoding)
-  - `victron.py`: Victron GX client (system readings, grid meter)
-  - Reconnect/backoff logic, protocol validation, status decoding
-
-- **`app/ha/`** — Home Assistant MQTT integration
-  - `client.py`: MQTT publish/subscribe and command handling
-  - `entities.py`: Entity definitions for MQTT discovery
-  - `parsers.py`: Payload parsing for HA commands
-  - `device.py`: Device and discovery payload construction
-
-- **`app/state/`** — Shared models and types
-  - `models.py`: `AppState` (mutable runtime state) and `StateSnapshot` (immutable outputs)
-  - `enums.py`: Charge modes, session states, charger status codes
-
-- **`app/config.py`** — Configuration lifecycle (load YAML, validate, persist)
-
-Cross-cutting helpers (e.g. exponential backoff, logging) stay outside domain packages.
-
-## Charging Events
-
-The controller publishes JSON events to `ev_charger/event/charging` to notify other systems of charging state changes. This is useful for Home Assistant automations that need to react to power draw changes.
-
-**Topic:** `ev_charger/event/charging`
-
-### Event: started
-
-Published when charging begins (setpoint goes from 0 to a positive value).
-
-```json
-{"event": "started", "mode": "Eco", "setpoint_w": 4400}
-```
-
-### Event: stopping
-
-Published at least 10 seconds before charging actually stops. The charger continues at the current setpoint during this grace period, giving other systems time to prepare for the power change.
-
-```json
-{"event": "stopping", "mode": "Eco", "reason": "max_soc_reached", "setpoint_w": 6200, "active_power_w": 5800}
-```
-
-If the stop condition clears during the 10-second grace period (e.g. a cloud passes), the stop is cancelled and a new `started` event is emitted.
-
-### Event: stopped
-
-Published when the setpoint is actually set to zero and charging has stopped. This event is delayed by at least 5 seconds after the setpoint goes to zero, ensuring the charger has fully wound down before other systems react.
-
-```json
-{"event": "stopped", "mode": "Eco", "reason": "max_soc_reached", "session_energy_wh": 12400, "ev_soc_pct": 79.9}
-```
-
-When EV SOC is unavailable, `ev_soc_pct` is `null`.
-
-### Stop Reasons
-
-| Reason | Description |
-|---|---|
-| `max_soc_reached` | EV SOC reached the max charge target |
-| `vehicle_disconnected` | EV was unplugged |
-| `standby` | User switched to Standby mode |
-| `victron_down` | Victron GX communications lost (Eco mode only) |
-| `eco_day_soc_gate` | Home battery SOC dropped below the daytime threshold |
-| `eco_day_mean_battery` | Sustained home battery discharge detected |
-| `eco_day_conditions` | Daytime solar conditions no longer sufficient |
-| `eco_night_floor` | Home battery at discharge floor, EV target met |
-
-## Vehicle SOC Input
-
-The GW22K-HCA-20 does not expose the vehicle's state of charge over Modbus. To use SOC-aware features (like stopping charging when the EV reaches a target SOC during the battery discharge window), feed the SOC in externally via MQTT.
-
-**Topic:** `ev_charger/vehicle/soc/set`
-**Payload:** a plain number representing the SOC percentage (0–100)
-
-Example:
-```bash
-mosquitto_pub -h 192.168.1.10 -t ev_charger/vehicle/soc/set -m "72"
-```
-
-This can be automated from Home Assistant using an automation that publishes the vehicle's SOC (from a car integration) to this topic on a regular interval. If no SOC update is received for 5 minutes, the value is treated as unavailable and the controller assumes the EV has not yet reached its minimum SOC target.
-
-## CI/CD
-
-The project uses GitHub Actions for continuous integration, Docker image builds, and releases.
-
-### Workflows
-
-| Workflow | Trigger | What it does |
-|---|---|---|
-| **CI** | Every push and PR to `main` | Lints with `ruff`, runs `pytest` |
-| **Build & Push Docker** | Every push (all branches and tags) | Multi-arch Docker build (amd64 + arm64). Pushes to DockerHub on `main` and version tags only. |
-| **Release** | Tag push (`v*`) | Creates a GitHub Release with auto-generated changelog and Docker pull instructions |
-
-### Required GitHub Secrets
-
-Add these in your repo under **Settings → Secrets and variables → Actions**:
-
-| Secret | Description |
-|---|---|
-| `DOCKERHUB_USERNAME` | Your DockerHub username |
-| `DOCKERHUB_TOKEN` | A DockerHub access token (not your password) |
-
-### Creating a Release
-
-```bash
-git tag -a v0.2.0 -m "Description of changes"
-git push origin v0.2.0
-```
-
-This triggers all three workflows: CI runs lint + tests, the Docker image is built and pushed with the version tag, and a GitHub Release is created automatically.
-
-### Branch Strategy
-
-- `main` is protected — no direct pushes
-- Work on feature branches, merge via pull requests
-- Every branch push gets CI checks and a Docker build (but only `main` and tags push images to DockerHub)
+See [AGENTS.md](AGENTS.md) for architecture details and module responsibilities.
 
 ## Hardware
 
-- **EV Charger**: GoodWe GW22K-HCA-20 (Modbus TCP, slave ID 247, practical setpoint range 4400–22000 W for active charging). Note: the documented minimum is 4200 W (raw 42), which is used as a pre-stop register value before issuing an explicit stop command.
-- **Inverter/Battery**: Victron GX (Modbus TCP, unit ID 100 for system, configurable for grid meter)
+- **EV Charger**: GoodWe GW22K-HCA-20 (Modbus TCP, slave ID 247, setpoint range 4.4–22 kW)
+- **Energy System**: Victron GX (Modbus TCP, unit ID 100 for system, configurable for grid meter)
 
 ## License
 
