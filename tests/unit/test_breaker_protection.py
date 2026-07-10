@@ -257,6 +257,16 @@ class TestHysteresis:
         # Still tripped
         assert loop._breaker_cap_tripped is True
 
+    def test_stays_zero_when_tripped_and_data_missing(self):
+        """FR-13 + EC-1: If tripped and data unavailable, stay at 0 (can't confirm safe)."""
+        state = _make_state()
+        state.victron_l1_current_a = None  # data missing
+        loop = make_ns_loop(state, _breaker_cap_tripped=True)
+        _fill_phase_samples(loop)
+
+        result = limit_phase_current(loop, 7000.0)
+        assert result == 0.0
+
 
 class TestInstantaneousOverride:
     """FR-12: Raw reading > 0.90 * I_brk overrides the rolling mean."""

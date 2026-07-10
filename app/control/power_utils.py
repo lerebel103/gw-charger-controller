@@ -180,17 +180,24 @@ def limit_phase_current(loop: SamplingLoopProtocol, setpoint: float) -> float:
     voltages = (state.victron_l1_voltage_v, state.victron_l2_voltage_v, state.victron_l3_voltage_v)
     raw_grid_currents = (state.victron_l1_current_a, state.victron_l2_current_a, state.victron_l3_current_a)
 
-    # EC-1: skip if any essential data is missing
-    if any(v is None for v in voltages):
-        return setpoint
-    if any(v is None for v in raw_grid_currents):
-        return setpoint
-    if any(v is None for v in ev_currents):
+    # EC-1: skip if any essential data is missing.
+    # However, if the cap is tripped (FR-13), stay at 0 — we cannot confirm headroom
+    # is safe without data, so we must not allow charging to resume.
+    data_missing = (
+        any(v is None for v in voltages)
+        or any(v is None for v in raw_grid_currents)
+        or any(v is None for v in ev_currents)
+    )
+    if data_missing:
+        if loop._breaker_cap_tripped:
+            return 0.0
         return setpoint
 
     # Get rolling means per phase
     means = (mean_phase_current(loop, 1), mean_phase_current(loop, 2), mean_phase_current(loop, 3))
     if any(m is None for m in means):
+        if loop._breaker_cap_tripped:
+            return 0.0
         return setpoint
 
     # FR-8: Detect active phases from measured EV current
