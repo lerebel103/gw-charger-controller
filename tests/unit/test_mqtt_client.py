@@ -200,46 +200,6 @@ class TestMQTTRuntimeEVSelects:
         ev.ensure_connected.assert_not_awaited()
         ev.disconnect.assert_not_awaited()
 
-    @pytest.mark.asyncio
-    async def test_runtime_max_grid_power_draw_allowed_in_standby_with_disconnect(self):
-        state = AppState(charge_mode="Standby")
-        cfg = MagicMock()
-        queue: asyncio.Queue = asyncio.Queue()
-        ev = AsyncMock()
-        ev.connected = True
-        ev.ensure_connected = AsyncMock()
-        ev.disconnect = AsyncMock()
-        ev.write_max_grid_power_draw = AsyncMock(return_value=True)
-        ev.read_max_grid_power_draw = AsyncMock(return_value=4200.0)
-
-        client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue, ev_client=ev)
-        client._client = AsyncMock()
-
-        await client._handle_command("ev_charger/number/max_grid_power_draw/set", "4200")
-
-        ev.ensure_connected.assert_awaited_once()
-        ev.write_max_grid_power_draw.assert_awaited_once_with(4200.0)
-        ev.read_max_grid_power_draw.assert_awaited_once()
-        ev.disconnect.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_runtime_max_grid_power_draw_invalid_range_rejected(self):
-        state = AppState(charge_mode="Standby")
-        cfg = MagicMock()
-        queue: asyncio.Queue = asyncio.Queue()
-        ev = AsyncMock()
-        ev.connected = True
-        ev.ensure_connected = AsyncMock()
-        ev.disconnect = AsyncMock()
-
-        client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue, ev_client=ev)
-        client._client = AsyncMock()
-
-        await client._handle_command("ev_charger/number/max_grid_power_draw/set", "4100")
-
-        ev.ensure_connected.assert_not_awaited()
-        ev.disconnect.assert_not_awaited()
-
 
 class TestMQTTChargeModeSelect:
     @pytest.mark.asyncio

@@ -119,12 +119,10 @@ class TestVictronModbusClient:
         grid_resp = _make_response([500, 300, 65436])
         # Battery power = -200 (uint16: 0xFF38 = 65336), SOC = 75
         batt_resp = _make_response([65336, 75])
-        # Voltages: 2300 (230.0V), 2310 (231.0V), 2290 (229.0V)
-        v1_resp = _make_response([2300])
-        v2_resp = _make_response([2310])
-        v3_resp = _make_response([2290])
+        # Block read 2616-2621: V1=2300, I1=50, V2=2310, I2=30, V3=2290, I3=-20 (uint16: 65516)
+        vc_resp = _make_response([2300, 50, 2310, 30, 2290, 65516])
 
-        mock_client.read_holding_registers = AsyncMock(side_effect=[grid_resp, batt_resp, v1_resp, v2_resp, v3_resp])
+        mock_client.read_holding_registers = AsyncMock(side_effect=[grid_resp, batt_resp, vc_resp])
 
         await vc._read_registers()
 
@@ -136,6 +134,9 @@ class TestVictronModbusClient:
         assert state.victron_l1_voltage_v == 230.0
         assert state.victron_l2_voltage_v == 231.0
         assert state.victron_l3_voltage_v == 229.0
+        assert state.victron_l1_current_a == 5.0
+        assert state.victron_l2_current_a == 3.0
+        assert state.victron_l3_current_a == -2.0
 
     @pytest.mark.asyncio
     async def test_read_registers_grid_error_raises(self):
@@ -185,6 +186,76 @@ class TestVictronModbusClient:
 
         with pytest.raises(ModbusException):
             await vc._read_registers()
+
+    @pytest.mark.asyncio
+    async def test_read_registers_plausibility_rejects_implausible_current(self):
+        """FR-15: Current exceeding 2 * grid_breaker_limit_a is rejected (set to None)."""
+        state = self._make_state(victron_grid_meter_unit_id=30)
+        state.grid_breaker_limit_a = 32.0  # plausibility limit = 64A
+        vc = VictronModbusClient(state)
+        mock_client = AsyncMock()
+        vc._client = mock_client
+
+        grid_resp = _make_response([0, 0, 0])
+        batt_resp = _make_response([0, 50])
+        # L1 current = 70A (700/10) → exceeds 2*32=64A, should be rejected
+        # L2 current = 5A (50/10) → within limit
+        # L3 current = -70A (uint16 for -700: 64836, /10=-70) → abs exceeds 64A, rejected
+        uint16_neg700 = 65536 - 700  # 64836
+        vc_resp = _make_response([2300, 700, 2310, 50, 2290, uint16_neg700])
+
+        mock_client.read_holding_registers = AsyncMock(side_effect=[grid_resp, batt_resp, vc_resp])
+
+        await vc._read_registers()
+
+        assert state.victron_l1_current_a is None  # 70A > 64A → rejected
+        assert state.victron_l2_current_a == 5.0  # 5A ≤ 64A → accepted
+        assert state.victron_l3_current_a is None  # |-70A| > 64A → rejected
+        assert state.victron_l1_voltage_v == 230.0  # voltages unaffected
+
+    @pytest.mark.asyncio
+    async def test_read_registers_block_read_failure_clears_currents(self):
+        """FR-14: Block read error clears per-phase current fields to None."""
+        state = self._make_state(victron_grid_meter_unit_id=30)
+        # Pre-populate with previous values
+        state.victron_l1_current_a = 10.0
+        state.victron_l2_current_a = 8.0
+        state.victron_l3_current_a = 6.0
+        vc = VictronModbusClient(state)
+        mock_client = AsyncMock()
+        vc._client = mock_client
+
+        grid_resp = _make_response([0, 0, 0])
+        batt_resp = _make_response([0, 50])
+        vc_resp = _make_error_response()
+
+        mock_client.read_holding_registers = AsyncMock(side_effect=[grid_resp, batt_resp, vc_resp])
+
+        from pymodbus.exceptions import ModbusException
+
+        with pytest.raises(ModbusException):
+            await vc._read_registers()
+
+        # All current fields cleared despite having previous values
+        assert state.victron_l1_current_a is None
+        assert state.victron_l2_current_a is None
+        assert state.victron_l3_current_a is None
+
+    @pytest.mark.asyncio
+    async def test_read_clears_currents_when_disconnected(self):
+        """FR-14: read() clears currents when client is not connected."""
+        state = self._make_state()
+        state.victron_l1_current_a = 10.0
+        state.victron_l2_current_a = 8.0
+        state.victron_l3_current_a = 6.0
+        vc = VictronModbusClient(state)
+        vc._client = None  # not connected
+
+        await vc.read()
+
+        assert state.victron_l1_current_a is None
+        assert state.victron_l2_current_a is None
+        assert state.victron_l3_current_a is None
 
     # --- reconnect ---
 

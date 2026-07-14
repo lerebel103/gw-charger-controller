@@ -33,7 +33,6 @@ _REG_CAR_CONNECTION = 10075
 _REG_PLUG_AND_CHARGE = 10019
 _REG_SINGLE_PHASE_SWITCHING = 10023
 _REG_MAX_CHARGING_POWER = 10029
-_REG_MAX_GRID_POWER_DRAW = 10039
 _REG_CHARGER_ENABLE = 10060
 _RAW_SETPOINT_MIN = 44  # practical minimum to reliably start charging (= 4.4 kW)
 _RAW_RUNTIME_SETPOINT_MIN = 42  # documented physical minimum (= 4.2 kW)
@@ -309,34 +308,6 @@ class EVChargerModbusClient:
             logger.warning("Failed to write single phase switching: %s", exc)
             return False
 
-    async def write_max_grid_power_draw(self, power_w: float) -> bool:
-        """Write register 10039 (max grid drawing power) using physical range 4200-22000 W."""
-        if not self.connected:
-            return False
-
-        raw = round(power_w / 100.0)
-        raw = max(_RAW_RUNTIME_SETPOINT_MIN, min(_RAW_SETPOINT_MAX, raw))
-
-        try:
-            resp = await self._client.write_register(
-                address=_REG_MAX_GRID_POWER_DRAW,
-                value=raw,
-                device_id=_SLAVE_ID,
-            )
-            if resp.isError():
-                raise ModbusException(f"Max grid power draw write error: {resp}")
-            self._state.ev_max_grid_power_draw_raw = raw
-            logger.info(
-                "Wrote max grid power draw: register %d <- raw=%d (%.0f W)",
-                _REG_MAX_GRID_POWER_DRAW,
-                raw,
-                raw * 100.0,
-            )
-            return True
-        except (ModbusException, OSError) as exc:
-            logger.warning("Failed to write max grid power draw: %s", exc)
-            return False
-
     async def read_plug_and_charge_auto_start(self) -> PlugAndChargeAutoStart | None:
         """Read register 10019 (plug-and-charge auto start)."""
         if not self.connected:
@@ -374,25 +345,6 @@ class EVChargerModbusClient:
             return mode
         except (ModbusException, OSError) as exc:
             logger.warning("Failed to read single phase switching: %s", exc)
-            return None
-
-    async def read_max_grid_power_draw(self) -> float | None:
-        """Read register 10039 (max grid drawing power) and return watts."""
-        if not self.connected:
-            return None
-        try:
-            resp = await self._client.read_holding_registers(
-                address=_REG_MAX_GRID_POWER_DRAW,
-                count=1,
-                device_id=_SLAVE_ID,
-            )
-            if resp.isError():
-                raise ModbusException(f"Max grid power draw read error: {resp}")
-            raw = resp.registers[0]
-            self._state.ev_max_grid_power_draw_raw = raw
-            return raw * 100.0
-        except (ModbusException, OSError) as exc:
-            logger.warning("Failed to read max grid power draw: %s", exc)
             return None
 
     async def start_charging(self) -> None:
@@ -550,29 +502,6 @@ class EVChargerModbusClient:
         if sp_resp.isError():
             raise ModbusException(f"EV charger setpoint read error: {sp_resp}")
         self._state.ev_charger_setpoint_raw = sp_resp.registers[0]
-
-        # Max grid drawing power (register 10039) is best-effort because some
-        # charger firmware variants may not expose this register consistently.
-        try:
-            mgp_resp = await self._client.read_holding_registers(
-                address=_REG_MAX_GRID_POWER_DRAW,
-                count=1,
-                device_id=_SLAVE_ID,
-            )
-            if mgp_resp.isError():
-                _throttle.warning("ev_max_grid_power_read", "EV charger max grid power draw read error: %s", mgp_resp)
-                self._state.ev_max_grid_power_draw_raw = None
-            else:
-                _throttle.clear("ev_max_grid_power_read")
-                self._state.ev_max_grid_power_draw_raw = mgp_resp.registers[0]
-        except (ModbusException, OSError) as exc:
-            _throttle.warning(
-                "ev_max_grid_power_read",
-                "Failed to read max grid power draw (register %d): %s",
-                _REG_MAX_GRID_POWER_DRAW,
-                exc,
-            )
-            self._state.ev_max_grid_power_draw_raw = None
 
         # Compute voltage drop percentages
         self._compute_voltage_drops()

@@ -77,6 +77,8 @@ class TestEcoNightModeHandler:
             solar_battery_soc_pct=20.0,
             solar_battery_power_w=200.0,
             solar_battery_discharge_floor_pct=20.0,
+            solar_battery_discharge_start="20:00",
+            solar_battery_discharge_end="12:00",
             ev_min_soc_pct=40.0,
             ev_soc_pct=20.0,
         )

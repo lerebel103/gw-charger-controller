@@ -17,6 +17,9 @@ class AppState:
     victron_l1_voltage_v: float | None = None
     victron_l2_voltage_v: float | None = None
     victron_l3_voltage_v: float | None = None
+    victron_l1_current_a: float | None = None
+    victron_l2_current_a: float | None = None
+    victron_l3_current_a: float | None = None
 
     # EV charger readings
     ev_connected: bool = False
@@ -48,7 +51,6 @@ class AppState:
     ev_plug_and_charge_auto_start: int | None = None
     ev_plug_and_charge_auto_start_enum: PlugAndChargeAutoStart | None = None
     ev_charger_setpoint_raw: int | None = None
-    ev_max_grid_power_draw_raw: int | None = None
     ev_soc_pct: float | None = None
     ev_soc_pct_updated_at: float | None = None
     ev_comm_healthy: bool = True
@@ -59,6 +61,9 @@ class AppState:
     l1_voltage_drop_pct: float | None = None
     l2_voltage_drop_pct: float | None = None
     l3_voltage_drop_pct: float | None = None
+    l1_breaker_headroom_pct: float | None = None
+    l2_breaker_headroom_pct: float | None = None
+    l3_breaker_headroom_pct: float | None = None
 
     # Control output
     commanded_setpoint_w: float | None = None
@@ -91,6 +96,7 @@ class AppState:
     victron_ip: str = ""
     victron_port: int = 502
     victron_grid_meter_unit_id: int = 30
+    grid_breaker_limit_a: float = 32.0
 
     # MQTT broker config (bootstrap only, not updated via MQTT)
     mqtt_host: str = ""
@@ -125,6 +131,7 @@ PERSISTED_FIELDS: set[str] = {
     "victron_ip",
     "victron_port",
     "victron_grid_meter_unit_id",
+    "grid_breaker_limit_a",
     "mqtt_host",
     "mqtt_port",
     "mqtt_username",
@@ -150,7 +157,6 @@ class StateSnapshot:
     ev_advanced_charging_mode_display: str | None = None
     ev_plug_and_charge_auto_start_display: str | None = None
     ev_single_phase_switching_display: str | None = None
-    ev_max_grid_power_draw_w: float | None = None
     ev_active_power_w: float | None = None
     ev_session_energy_wh: float | None = None
     ev_voltage_l1_v: float | None = None
@@ -165,6 +171,12 @@ class StateSnapshot:
     l1_voltage_drop_pct: float | None = None
     l2_voltage_drop_pct: float | None = None
     l3_voltage_drop_pct: float | None = None
+    l1_breaker_headroom_pct: float | None = None
+    l2_breaker_headroom_pct: float | None = None
+    l3_breaker_headroom_pct: float | None = None
+    victron_l1_current_a: float | None = None
+    victron_l2_current_a: float | None = None
+    victron_l3_current_a: float | None = None
     commanded_setpoint_w: float | None = None
     uptime_s: float = 0.0
     timestamp: datetime = field(default_factory=datetime.now)

@@ -735,8 +735,8 @@ class TestEcoNightGridFallback:
             ev_min_soc_pct=40.0,
             ev_battery_capacity_kwh=82.0,
             grid_power_w=0.0,
-            solar_battery_discharge_start="23:00",
-            solar_battery_discharge_end="06:00",
+            solar_battery_discharge_start="20:00",
+            solar_battery_discharge_end="12:00",
         )
         defaults.update(overrides)
         return AppState(**defaults)

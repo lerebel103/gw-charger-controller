@@ -6,12 +6,18 @@ import time as _time
 
 from app.config import ConfigManager
 from app.control.constants import (
+    _BREAKER_SAFETY_FRACTION,
     _EV_MAX_SOC_DEFAULT,
     _MIN_CHARGE_W,
     _STOP_PRESET_W,
 )
 from app.control.mode_strategies import compute_setpoint
-from app.control.power_utils import record_samples
+from app.control.power_utils import (
+    limit_phase_current,
+    mean_phase_current,
+    record_phase_current_samples,
+    record_samples,
+)
 from app.control.protocols import VictronClientProtocol
 from app.control.snapshot import build_snapshot
 from app.control.state_machine import (
@@ -57,6 +63,10 @@ class ControlLoop:
         self._standby_write_quiet: bool = False
         self._grid_power_samples: list[tuple[float, float]] = []
         self._battery_power_samples: list[tuple[float, float]] = []
+        self._l1_current_samples: list[tuple[float, float]] = []
+        self._l2_current_samples: list[tuple[float, float]] = []
+        self._l3_current_samples: list[tuple[float, float]] = []
+        self._breaker_cap_tripped: bool = False
         self._state_machine = ChargingStateMachine(self)
 
     async def _apply_ev_output(self, setpoint: float, suppress_ev_writes: bool) -> None:
@@ -85,6 +95,7 @@ class ControlLoop:
                 await self._ev_client.read()
 
             record_samples(self)
+            record_phase_current_samples(self)
 
             if self._state.ev_connected and self._prev_ev_connected is not True:
                 logger.info("EV vehicle connected")
@@ -105,9 +116,31 @@ class ControlLoop:
 
             setpoint = compute_setpoint(self)
             setpoint = self._state_machine.apply_charging_events(setpoint)
+            setpoint = limit_phase_current(self, setpoint)
             suppress_ev_writes = self._state_machine.should_suppress_ev_writes(setpoint)
             await self._apply_ev_output(setpoint, suppress_ev_writes)
             self._state.commanded_setpoint_w = setpoint
+
+            # Compute breaker headroom diagnostics for snapshot (FR-11)
+            safety_limit = _BREAKER_SAFETY_FRACTION * self._state.grid_breaker_limit_a
+            raw_currents = (
+                self._state.victron_l1_current_a,
+                self._state.victron_l2_current_a,
+                self._state.victron_l3_current_a,
+            )
+            headroom_phases = (
+                (1, "l1_breaker_headroom_pct"),
+                (2, "l2_breaker_headroom_pct"),
+                (3, "l3_breaker_headroom_pct"),
+            )
+            for phase, attr in headroom_phases:
+                raw_i = raw_currents[phase - 1]
+                mean_i = mean_phase_current(self, phase)
+                if raw_i is not None and mean_i is not None and safety_limit > 0:
+                    headroom = (safety_limit - mean_i) / safety_limit * 100.0
+                    setattr(self._state, attr, min(headroom, 100.0))
+                else:
+                    setattr(self._state, attr, None)
 
             await self._publish_queue.put(build_snapshot(self))
             await asyncio.sleep(self._state.control_loop_interval_s)

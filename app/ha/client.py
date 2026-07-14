@@ -45,9 +45,6 @@ from app.ha.parsers import (
     parse_advanced_mode_payload as _parse_advanced_mode_payload,
 )
 from app.ha.parsers import (
-    parse_max_grid_power_draw_payload as _parse_max_grid_power_draw_payload,
-)
-from app.ha.parsers import (
     parse_plug_and_charge_payload as _parse_plug_and_charge_payload,
 )
 from app.ha.parsers import (
@@ -178,6 +175,21 @@ class MQTTClient:
             f"{_PREFIX}/sensor/l3_voltage_drop_perc/state",
             _fmt_drop(snapshot.l3_voltage_drop_pct),
         )
+        await self._client.publish(
+            f"{_PREFIX}/sensor/l1_breaker_headroom/state",
+            _fmt_drop(snapshot.l1_breaker_headroom_pct),
+        )
+        await self._client.publish(
+            f"{_PREFIX}/sensor/l2_breaker_headroom/state",
+            _fmt_drop(snapshot.l2_breaker_headroom_pct),
+        )
+        await self._client.publish(
+            f"{_PREFIX}/sensor/l3_breaker_headroom/state",
+            _fmt_drop(snapshot.l3_breaker_headroom_pct),
+        )
+        await self._client.publish(f"{_PREFIX}/sensor/grid_current_l1/state", _fmt(snapshot.victron_l1_current_a))
+        await self._client.publish(f"{_PREFIX}/sensor/grid_current_l2/state", _fmt(snapshot.victron_l2_current_a))
+        await self._client.publish(f"{_PREFIX}/sensor/grid_current_l3/state", _fmt(snapshot.victron_l3_current_a))
         await self._client.publish(f"{_PREFIX}/sensor/completion_time/state", _fmt(snapshot.ev_completion_time_h))
         await self._client.publish(f"{_PREFIX}/sensor/ev_soc/state", _fmt(snapshot.ev_soc_pct))
         await self._client.publish(f"{_PREFIX}/sensor/status/state", _fmt(snapshot.ev_charger_status_display))
@@ -242,11 +254,6 @@ class MQTTClient:
             plug_and_charge_state,
             retain=True,
         )
-        await self._client.publish(
-            f"{_PREFIX}/number/max_grid_power_draw/state",
-            _fmt(snapshot.ev_max_grid_power_draw_w),
-            retain=True,
-        )
 
         # Diagnostics
         await self._client.publish(f"{_PREFIX}/sensor/uptime/state", str(int(snapshot.uptime_s)))
@@ -277,6 +284,7 @@ class MQTTClient:
             (f"{_PREFIX}/number/eco_day_solar_batt_charge_start/state", str(s.eco_day_solar_battery_charge_start_w)),
             (f"{_PREFIX}/number/eco_day_ramp_step/state", str(s.eco_day_ramp_step_w)),
             (f"{_PREFIX}/number/measurement_correction/state", str(s.correction_pct)),
+            (f"{_PREFIX}/number/grid_breaker_limit/state", str(s.grid_breaker_limit_a)),
             (f"{_PREFIX}/text/solar_battery_discharge_start/state", s.solar_battery_discharge_start),
             (f"{_PREFIX}/text/solar_battery_discharge_end/state", s.solar_battery_discharge_end),
             (f"{_PREFIX}/text/ev_charger_ip/state", s.ev_charger_ip),
@@ -301,12 +309,6 @@ class MQTTClient:
                 if s.ev_single_phase_switching_enum == SinglePhaseSwitching.ENABLED
                 else "OFF"
                 if s.ev_single_phase_switching_enum == SinglePhaseSwitching.DISABLED
-                else "unavailable",
-            ),
-            (
-                f"{_PREFIX}/number/max_grid_power_draw/state",
-                str(s.ev_max_grid_power_draw_raw * 100.0)
-                if s.ev_max_grid_power_draw_raw is not None
                 else "unavailable",
             ),
         ]
@@ -444,7 +446,6 @@ class MQTTClient:
             return
 
         enum_value: AdvancedChargingMode | PlugAndChargeAutoStart | SinglePhaseSwitching | None = None
-        number_value_w: float | None = None
 
         if attr == "ev_advanced_charging_mode":
             enum_value = _parse_advanced_mode_payload(payload)
@@ -473,20 +474,6 @@ class MQTTClient:
                 return
             writer = self._ev_client.write_single_phase_switching
             reader = self._ev_client.read_single_phase_switching
-        elif attr == "ev_max_grid_power_draw":
-            number_value_w = _parse_max_grid_power_draw_payload(payload)
-            if number_value_w is None:
-                logger.warning("Invalid number value '%s' for %s", payload, attr)
-                return
-            current_w = (
-                self._state.ev_max_grid_power_draw_raw * 100.0
-                if self._state.ev_max_grid_power_draw_raw is not None
-                else None
-            )
-            if current_w is not None and abs(current_w - number_value_w) < 0.5:
-                return
-            writer = self._ev_client.write_max_grid_power_draw
-            reader = self._ev_client.read_max_grid_power_draw
         else:
             logger.warning("Unsupported runtime EV select field: %s", attr)
             return
@@ -499,10 +486,7 @@ class MQTTClient:
             return
 
         try:
-            if attr == "ev_max_grid_power_draw":
-                ok = await writer(number_value_w)
-            else:
-                ok = await writer(enum_value)
+            ok = await writer(enum_value)
             if not ok:
                 return
             confirmed = await reader()
@@ -515,8 +499,6 @@ class MQTTClient:
                     state_value = "OFF"
                 else:
                     state_value = "unavailable"
-            elif attr == "ev_max_grid_power_draw":
-                state_value = str(confirmed) if confirmed is not None else "unavailable"
             else:
                 state_value = confirmed.display_name if confirmed is not None else "unavailable"
 

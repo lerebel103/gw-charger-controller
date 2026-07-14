@@ -22,3 +22,10 @@ _STOPPED_DELAY_S = 5.0  # delay after setpoint->0 before emitting stopped event
 _EV_SOC_STALE_S = 300.0  # 5 minutes - treat SOC as unavailable if not updated
 _EV_STATUS_STALE_S = 300.0  # 5 minutes - treat EV status as stale if not refreshed
 _EXTERNAL_STOP_CONFIRM_TICKS = 2  # consecutive non-charging status ticks before external stop
+
+# Breaker protection constants (Dynamic Phase-Current Scaling)
+_BREAKER_SAFETY_FRACTION = 0.80  # industry-standard breaker derating (FR-6)
+_PHASE_CURRENT_MEAN_WINDOW_S = 30.0  # fixed rolling mean window for phase current (FR-10)
+_BREAKER_INSTANT_THRESHOLD_FRACTION = 0.90  # raw reading threshold for instantaneous override (FR-12)
+_BREAKER_CAP_RESTART_MARGIN_W = 500.0  # hysteresis above _MIN_CHARGE_W before restart (FR-13)
+_PHASE_ACTIVE_THRESHOLD_A = 0.5  # EV phase considered active if current exceeds this (FR-8)
