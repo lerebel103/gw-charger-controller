@@ -86,6 +86,13 @@ class ControlLoop:
     async def run_loop(self) -> None:
         """Master control loop: read -> compute -> write -> publish."""
         while True:
+            # Detect standby exit: if suppression is active but mode is no longer
+            # Standby, force a clean EV reconnect before reads resume.
+            if self._standby_write_quiet and self._state.charge_mode != "Standby":
+                logger.info("Exiting standby suppression, forcing EV charger reconnect")
+                self._standby_write_quiet = False
+                await self._ev_client.reconnect()
+
             await self._victron_client.ensure_connected()
             if not self._standby_write_quiet:
                 await self._ev_client.ensure_connected()

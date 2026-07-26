@@ -215,6 +215,7 @@ ENTITIES: list[dict[str, Any]] = [
     ),
     _switch("ev_charger_plug_and_charge_auto_start", "Plug and Charge Auto Start", "plug_and_charge_auto_start"),
     _switch("ev_charger_single_phase_switching", "Single Phase Switching", "single_phase_switching"),
+    _switch("ev_charger_eco_day_min_charge", "Eco Day Min Charge", "eco_day_min_charge"),
     _number("ev_charger_manual_power", "Manual Charge Power", "manual_power", 4400, 11000, 100, "W"),
     _number("ev_charger_ev_min_soc", "Min EV SOC", "ev_min_soc", 0, 100, 1, "%"),
     _number("ev_charger_ev_max_soc", "Max EV SOC", "ev_max_soc", 80, 100, 1, "%"),

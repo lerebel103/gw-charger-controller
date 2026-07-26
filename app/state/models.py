@@ -87,6 +87,7 @@ class AppState:
     eco_day_solar_battery_full_pct: float = 96.0
     eco_day_solar_battery_full_exit_pct: float = 90.0
     eco_day_solar_battery_charge_start_w: float = 5500.0
+    eco_day_min_charge_enabled: bool = False
     eco_day_ramp_step_w: float = 200.0
     correction_pct: float = 5.6
 
@@ -125,6 +126,7 @@ PERSISTED_FIELDS: set[str] = {
     "eco_day_solar_battery_full_exit_pct",
     "eco_day_solar_battery_charge_start_w",
     "eco_day_ramp_step_w",
+    "eco_day_min_charge_enabled",
     "correction_pct",
     "ev_charger_ip",
     "ev_charger_port",

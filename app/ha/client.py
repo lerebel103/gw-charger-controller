@@ -311,6 +311,10 @@ class MQTTClient:
                 if s.ev_single_phase_switching_enum == SinglePhaseSwitching.DISABLED
                 else "unavailable",
             ),
+            (
+                f"{_PREFIX}/switch/eco_day_min_charge/state",
+                "ON" if s.eco_day_min_charge_enabled else "OFF",
+            ),
         ]
         for topic, value in pairs:
             await self._client.publish(topic, value, retain=True)
@@ -363,6 +367,16 @@ class MQTTClient:
             if getattr(self._state, attr) == payload:
                 return
             setattr(self._state, attr, payload)
+
+        elif vtype == "switch":
+            if payload not in ("ON", "OFF"):
+                logger.warning("Invalid switch value '%s' for %s", payload, attr)
+                await self._echo_current_value(topic_str, attr)
+                return
+            bool_val = payload == "ON"
+            if getattr(self._state, attr) == bool_val:
+                return
+            setattr(self._state, attr, bool_val)
 
         elif vtype == "hhmm":
             if not validate_hhmm(payload):
@@ -420,7 +434,8 @@ class MQTTClient:
         # Republish the updated value to the state topic so HA confirms the change
         state_topic = _CMD_TO_STATE_TOPIC.get(topic_str)
         if state_topic and self._client is not None:
-            new_value = str(getattr(self._state, attr))
+            raw_value = getattr(self._state, attr)
+            new_value = ("ON" if raw_value else "OFF") if isinstance(raw_value, bool) else str(raw_value)
             await self._client.publish(state_topic, new_value, retain=True)
 
         # Trigger reconnect for device connection changes
@@ -436,7 +451,8 @@ class MQTTClient:
         """Republish the current state value to HA so the UI reverts on rejected commands."""
         state_topic = _CMD_TO_STATE_TOPIC.get(topic_str)
         if state_topic and self._client is not None:
-            current_value = str(getattr(self._state, attr))
+            raw_value = getattr(self._state, attr)
+            current_value = ("ON" if raw_value else "OFF") if isinstance(raw_value, bool) else str(raw_value)
             await self._client.publish(state_topic, current_value, retain=True)
 
     async def _handle_runtime_ev_select(self, attr: str, payload: str, topic: str) -> None:
