@@ -161,6 +161,13 @@ class EcoDayModeHandler(ModeSetpointHandler):
     def compute(self, loop: ModeLoopProtocol) -> float:
         state = loop._state
 
+        # Eco Day Min Charge: if enabled and EV SOC below min, charge immediately
+        if state.eco_day_min_charge_enabled:
+            ev_soc = get_ev_soc(loop)
+            if ev_soc is not None and ev_soc < state.ev_min_soc_pct:
+                loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_MIN_CHARGE)
+                return _MIN_CHARGE_W
+
         if state.solar_battery_soc_pct is not None and (
             state.solar_battery_soc_pct < state.eco_day_min_solar_battery_soc_pct
         ):

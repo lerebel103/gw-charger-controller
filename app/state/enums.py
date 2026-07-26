@@ -23,6 +23,7 @@ class ChargeModeState(StrEnum):
     STANDBY = "standby"
     ECO_VICTRON_DOWN = "eco_victron_down"
     ECO_DAY_SOC_GATE = "eco_day_soc_gate"
+    ECO_DAY_MIN_CHARGE = "eco_day_min_charge"
     ECO_DAY_WAITING_FOR_EXPORT = "eco_day_waiting_for_export"
     ECO_DAY_COOLDOWN = "eco_day_cooldown"
     ECO_DAY_MINIMUM = "eco_day_minimum"
