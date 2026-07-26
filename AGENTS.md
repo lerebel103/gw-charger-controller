@@ -94,6 +94,7 @@ This document describes the implementation conventions and architectural decisio
 - **Classes**: `EcoModeHandler`, `ManualModeHandler`, `StandbyModeHandler`, etc.
 - **Pattern**: OO strategy; each mode has a `compute(loop) -> float` method
 - **Dispatch**: `compute_setpoint()` routes to the appropriate handler based on `loop._state.charge_mode`
+- **Eco Day Min Charge**: Optional early-exit in `EcoDayModeHandler` — if `eco_day_min_charge_enabled` and EV SOC < `ev_min_soc_pct`, returns minimum power immediately (before solar/battery checks)
 
 #### `app/control/power_utils.py` (Utility Functions)
 - **Purpose**: Helpers for rolling means, grid fallback calculation, battery discharge limiting

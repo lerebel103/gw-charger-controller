@@ -22,6 +22,15 @@ An intelligent EV charging controller that bridges a **GoodWe GW22K-HCA-20** cha
 | **Manual** | Charges at a fixed user-configured power (4.4–22 kW). Resets to Eco on unplug. |
 | **Standby** | Stops charging and suppresses all EV charger communication. |
 
+### Eco Day Min Charge
+
+An optional feature (toggle "Eco Day Min Charge" switch in HA) that ensures the EV reaches a minimum SOC as soon as it connects, even during the day. When enabled:
+
+- If EV SOC is below the configured **Min EV SOC** threshold, charging starts immediately at minimum power (4.4 kW)
+- Grid power is drawn if solar is insufficient — guaranteeing the car reaches a usable charge level
+- Once the minimum SOC is reached, normal eco day solar harvesting logic takes over (ramp tracking, battery SOC gating, etc.)
+- Disabled by default to preserve existing behaviour
+
 ## Breaker Protection
 
 An always-on safety mechanism that dynamically caps the charge setpoint to keep every grid phase below 80% of the configured breaker rating. Uses a 30s rolling mean for smooth operation and an instantaneous override at 90% for fast transients (e.g. solar dropout). See [docs/grid-power-scaling.md](docs/grid-power-scaling.md) for the full algorithm.
