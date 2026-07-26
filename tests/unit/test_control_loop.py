@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import time as _time
 
+import pytest
+
 from app.control.constants import (
     _ECO_DAY_COOLDOWN_S,
     _ECO_DAY_RAMP_STEP_W,
@@ -1400,3 +1402,97 @@ class TestEvOutputActuation:
         cl._ev_client.write_setpoint.assert_awaited_once_with(5600.0)
         cl._ev_client.start_charging.assert_not_awaited()
         cl._ev_client.stop_charging.assert_not_awaited()
+
+
+class TestStandbyExitReconnect:
+    """Tests for the standby exit race condition fix."""
+
+    def _make_state(self, **overrides):
+        defaults = dict(
+            ev_connected=True,
+            charge_mode="Eco",
+            ev_charger_status_enum=ChargerStatus.IDLE_CONNECTOR_PLUGGED,
+            ev_active_power_w=0.0,
+            solar_battery_soc_pct=95.0,
+            solar_battery_power_w=2000.0,
+            solar_battery_discharge_start="23:00",
+            solar_battery_discharge_end="06:00",
+        )
+        defaults.update(overrides)
+        return AppState(**defaults)
+
+    @pytest.mark.asyncio
+    async def test_standby_exit_forces_ev_reconnect(self):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        state = self._make_state(charge_mode="Eco")
+        victron = MagicMock()
+        victron.connected = True
+        victron.ensure_connected = AsyncMock()
+        victron.read = AsyncMock()
+        ev = AsyncMock()
+        ev.connected = True
+        ev.ensure_connected = AsyncMock()
+        ev.read = AsyncMock()
+        ev.reconnect = AsyncMock()
+        ev.write_setpoint = AsyncMock()
+
+        from app.control.loop import ControlLoop
+
+        cl = ControlLoop(state, victron, ev, asyncio.Queue())
+        cl._standby_write_quiet = True  # Simulate standby suppression was active
+
+        # Run one iteration only (patch sleep to cancel the task)
+        async def _break(*a, **kw):
+            raise asyncio.CancelledError
+
+        with pytest.raises(asyncio.CancelledError):
+            import unittest.mock
+
+            with unittest.mock.patch("asyncio.sleep", side_effect=_break):
+                await cl.run_loop()
+
+        # Verify reconnect was called before normal reads
+        ev.reconnect.assert_awaited_once()
+        assert cl._standby_write_quiet is False
+        # EV reads should proceed after reconnect
+        ev.ensure_connected.assert_awaited()
+        ev.read.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_reconnect_when_still_in_standby(self):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        state = self._make_state(charge_mode="Standby")
+        state.ev_charger_status_enum = ChargerStatus.IDLE_CONNECTOR_PLUGGED
+        victron = MagicMock()
+        victron.connected = True
+        victron.ensure_connected = AsyncMock()
+        victron.read = AsyncMock()
+        ev = AsyncMock()
+        ev.connected = True
+        ev.ensure_connected = AsyncMock()
+        ev.read = AsyncMock()
+        ev.reconnect = AsyncMock()
+        ev.write_setpoint = AsyncMock()
+        ev.stop_charging = AsyncMock()
+
+        from app.control.loop import ControlLoop
+
+        cl = ControlLoop(state, victron, ev, asyncio.Queue())
+        cl._standby_write_quiet = True
+
+        async def _break(*a, **kw):
+            raise asyncio.CancelledError
+
+        with pytest.raises(asyncio.CancelledError):
+            import unittest.mock
+
+            with unittest.mock.patch("asyncio.sleep", side_effect=_break):
+                await cl.run_loop()
+
+        # Should NOT reconnect while still in standby
+        ev.reconnect.assert_not_awaited()
+        assert cl._standby_write_quiet is True

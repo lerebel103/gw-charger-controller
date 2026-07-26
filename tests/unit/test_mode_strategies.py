@@ -96,3 +96,106 @@ class TestComputeSetpoint:
         loop = make_ns_loop(AppState(ev_connected=True, charge_mode="Manual", manual_power_w=4200.0))
 
         assert compute_setpoint(loop) == _MIN_CHARGE_W
+
+
+class TestEcoDayMinCharge:
+    def test_returns_min_charge_when_enabled_and_soc_below_threshold(self):
+        state = AppState(
+            ev_connected=True,
+            charge_mode="Eco",
+            eco_day_min_charge_enabled=True,
+            ev_min_soc_pct=50.0,
+            ev_soc_pct=30.0,
+            solar_battery_soc_pct=95.0,
+            solar_battery_discharge_start="23:00",
+            solar_battery_discharge_end="06:00",
+        )
+        state.ev_soc_pct_updated_at = _time.monotonic()
+        loop = make_ns_loop(state)
+
+        from app.control.mode_strategies import EcoDayModeHandler
+
+        result = EcoDayModeHandler().compute(loop)
+
+        assert result == _MIN_CHARGE_W
+        assert loop._state_machine.mode_state == ChargeModeState.ECO_DAY_MIN_CHARGE
+
+    def test_does_not_trigger_when_disabled(self):
+        state = AppState(
+            ev_connected=True,
+            charge_mode="Eco",
+            eco_day_min_charge_enabled=False,
+            ev_min_soc_pct=50.0,
+            ev_soc_pct=30.0,
+            solar_battery_soc_pct=95.0,
+            solar_battery_discharge_start="23:00",
+            solar_battery_discharge_end="06:00",
+        )
+        state.ev_soc_pct_updated_at = _time.monotonic()
+        loop = make_ns_loop(state)
+
+        from app.control.mode_strategies import EcoDayModeHandler
+
+        EcoDayModeHandler().compute(loop)
+
+        # Should fall through to normal eco day logic, not min charge
+        assert loop._state_machine.mode_state != ChargeModeState.ECO_DAY_MIN_CHARGE
+
+    def test_does_not_trigger_when_soc_is_none(self):
+        state = AppState(
+            ev_connected=True,
+            charge_mode="Eco",
+            eco_day_min_charge_enabled=True,
+            ev_min_soc_pct=50.0,
+            ev_soc_pct=None,
+            solar_battery_soc_pct=95.0,
+            solar_battery_discharge_start="23:00",
+            solar_battery_discharge_end="06:00",
+        )
+        loop = make_ns_loop(state)
+
+        from app.control.mode_strategies import EcoDayModeHandler
+
+        EcoDayModeHandler().compute(loop)
+
+        assert loop._state_machine.mode_state != ChargeModeState.ECO_DAY_MIN_CHARGE
+
+    def test_does_not_trigger_when_soc_at_threshold(self):
+        state = AppState(
+            ev_connected=True,
+            charge_mode="Eco",
+            eco_day_min_charge_enabled=True,
+            ev_min_soc_pct=50.0,
+            ev_soc_pct=50.0,
+            solar_battery_soc_pct=95.0,
+            solar_battery_discharge_start="23:00",
+            solar_battery_discharge_end="06:00",
+        )
+        state.ev_soc_pct_updated_at = _time.monotonic()
+        loop = make_ns_loop(state)
+
+        from app.control.mode_strategies import EcoDayModeHandler
+
+        EcoDayModeHandler().compute(loop)
+
+        assert loop._state_machine.mode_state != ChargeModeState.ECO_DAY_MIN_CHARGE
+
+    def test_does_not_trigger_when_soc_above_threshold(self):
+        state = AppState(
+            ev_connected=True,
+            charge_mode="Eco",
+            eco_day_min_charge_enabled=True,
+            ev_min_soc_pct=50.0,
+            ev_soc_pct=80.0,
+            solar_battery_soc_pct=95.0,
+            solar_battery_discharge_start="23:00",
+            solar_battery_discharge_end="06:00",
+        )
+        state.ev_soc_pct_updated_at = _time.monotonic()
+        loop = make_ns_loop(state)
+
+        from app.control.mode_strategies import EcoDayModeHandler
+
+        EcoDayModeHandler().compute(loop)
+
+        assert loop._state_machine.mode_state != ChargeModeState.ECO_DAY_MIN_CHARGE

@@ -286,3 +286,69 @@ class TestMQTTRunLoop:
         throttle.clear.assert_any_call("mqtt_connect_fail")
         throttle.clear.assert_any_call("mqtt_publish_fail")
         throttle.reset.assert_called_once_with("mqtt_retry")
+
+
+class TestMQTTSwitchVtype:
+    """Tests for the generic persisted config switch handler (vtype == 'switch')."""
+
+    @pytest.mark.asyncio
+    async def test_switch_on_updates_state_and_persists(self):
+        state = AppState(eco_day_min_charge_enabled=False)
+        cfg = MagicMock()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue)
+        client._client = AsyncMock()
+
+        await client._handle_command("ev_charger/switch/eco_day_min_charge/set", "ON")
+
+        assert state.eco_day_min_charge_enabled is True
+        cfg.schedule_persist.assert_called_once_with(state)
+        client._client.publish.assert_awaited_once_with("ev_charger/switch/eco_day_min_charge/state", "ON", retain=True)
+
+    @pytest.mark.asyncio
+    async def test_switch_off_updates_state_and_persists(self):
+        state = AppState(eco_day_min_charge_enabled=True)
+        cfg = MagicMock()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue)
+        client._client = AsyncMock()
+
+        await client._handle_command("ev_charger/switch/eco_day_min_charge/set", "OFF")
+
+        assert state.eco_day_min_charge_enabled is False
+        cfg.schedule_persist.assert_called_once_with(state)
+        client._client.publish.assert_awaited_once_with(
+            "ev_charger/switch/eco_day_min_charge/state", "OFF", retain=True
+        )
+
+    @pytest.mark.asyncio
+    async def test_switch_invalid_payload_rejected_and_echoed(self):
+        state = AppState(eco_day_min_charge_enabled=True)
+        cfg = MagicMock()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue)
+        client._client = AsyncMock()
+
+        await client._handle_command("ev_charger/switch/eco_day_min_charge/set", "INVALID")
+
+        assert state.eco_day_min_charge_enabled is True
+        cfg.schedule_persist.assert_not_called()
+        # Should echo current value back
+        client._client.publish.assert_awaited_once_with("ev_charger/switch/eco_day_min_charge/state", "ON", retain=True)
+
+    @pytest.mark.asyncio
+    async def test_switch_noop_does_not_persist(self):
+        state = AppState(eco_day_min_charge_enabled=True)
+        cfg = MagicMock()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue)
+        client._client = AsyncMock()
+
+        await client._handle_command("ev_charger/switch/eco_day_min_charge/set", "ON")
+
+        cfg.schedule_persist.assert_not_called()
+        client._client.publish.assert_not_awaited()
