@@ -224,9 +224,9 @@ class MQTTClient:
         )
 
         # Binary sensor
-        await self._client.publish(
+        await _pub_if(
             f"{_PREFIX}/binary_sensor/connected/state",
-            "ON" if snapshot.ev_connected else "OFF",
+            _fmt_binary(snapshot.ev_connected),
         )
         await _pub_if(
             f"{_PREFIX}/binary_sensor/comm_wifi_router/state",

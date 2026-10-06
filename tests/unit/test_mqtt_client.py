@@ -516,6 +516,65 @@ class TestMQTTPublishStateTransientErrors:
         assert "unavailable" not in published.values()
 
 
+class TestMQTTPublishStateEVUnhealthy:
+    """During an EV comms outage the snapshot masks EV fields to None, so their
+    state topics must not be republished (letting expire_after elapse) while
+    non-EV topics keep publishing valid values."""
+
+    @pytest.mark.asyncio
+    async def test_masked_ev_snapshot_skips_ev_topics_but_keeps_non_ev(self):
+        state = AppState()
+        cfg = MagicMock()
+        queue: asyncio.Queue = asyncio.Queue()
+        client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue)
+        client._client = AsyncMock()
+
+        # Snapshot AFTER masking: every EV-derived field is None (as build_snapshot
+        # produces when ev_comm_healthy is False), while non-EV fields are valid.
+        snapshot = StateSnapshot(
+            ev_connected=None,
+            l1_breaker_headroom_pct=50.0,
+            l2_breaker_headroom_pct=60.0,
+            l3_breaker_headroom_pct=70.0,
+            victron_l1_current_a=5.0,
+            uptime_s=10,
+        )
+        await client._publish_state(snapshot)
+
+        published = _published(client._client)
+
+        # No topic ever receives the literal "unavailable".
+        assert "unavailable" not in published.values()
+
+        # EV numeric/enum topics are skipped (expire_after can elapse).
+        for topic in _NUMERIC_STATE_TOPICS:
+            if topic in (
+                "ev_charger/sensor/l1_breaker_headroom/state",
+                "ev_charger/sensor/l2_breaker_headroom/state",
+                "ev_charger/sensor/l3_breaker_headroom/state",
+                "ev_charger/sensor/grid_current_l1/state",
+            ):
+                continue
+            assert topic not in published, f"{topic} should be skipped during EV outage"
+
+        # Masked connected binary_sensor is skipped (now via _pub_if).
+        assert "ev_charger/binary_sensor/connected/state" not in published
+        for slug in (
+            "comm_wifi_router",
+            "comm_iot_cloud",
+            "comm_inverter",
+            "comm_mid_meter",
+            "comm_gw_meter",
+            "comm_ems",
+        ):
+            assert f"ev_charger/binary_sensor/{slug}/state" not in published
+
+        # Non-EV topics still publish their valid values.
+        assert published["ev_charger/sensor/l1_breaker_headroom/state"] == "50.0"
+        assert published["ev_charger/sensor/grid_current_l1/state"] == "5.0"
+        assert "ev_charger/sensor/uptime/state" in published
+
+
 class TestMQTTPublishConfigStateNoneEnums:
     @pytest.mark.asyncio
     async def test_config_state_skips_unknown_runtime_enums(self):
