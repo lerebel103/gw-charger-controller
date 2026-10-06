@@ -145,7 +145,7 @@ PERSISTED_FIELDS: set[str] = {
 class StateSnapshot:
     """Immutable snapshot enqueued by the control loop for MQTT publishing."""
 
-    ev_connected: bool = False
+    ev_connected: bool | None = False
     ev_charger_status: int | None = None
     ev_charger_status_display: str | None = None
     ev_comm_connection_status_raw: int | None = None

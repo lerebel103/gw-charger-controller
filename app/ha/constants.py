@@ -5,6 +5,21 @@ from app.state import AdvancedChargingMode
 PREFIX = "ev_charger"
 VEHICLE_SOC_TOPIC = f"{PREFIX}/vehicle/soc/set"
 
+# Availability strategy (see app/ha/client.py for rationale):
+# A single shared availability topic marks the whole integration online/offline
+# (via connect/disconnect publishes and an MQTT LWT). Per-cycle stale values are
+# never written as the string "unavailable" to a numeric/enum state topic; instead
+# the publish is skipped and sensors use expire_after so HA flips them to "unknown"
+# after a sustained gap without a fresh reading.
+AVAILABILITY_TOPIC = f"{PREFIX}/availability"
+PAYLOAD_AVAILABLE = "online"
+PAYLOAD_NOT_AVAILABLE = "offline"
+
+# expire_after window for sensor entities, in seconds. Chosen as 5x the maximum
+# control-loop interval (control_loop_interval_s max is 60s) so a sensor survives a
+# few missed cycles but is marked "unknown" by HA after a sustained gap.
+SENSOR_EXPIRE_AFTER = 300
+
 DEPRECATED_DISCOVERY_TOPICS = [
     "homeassistant/select/ev_charger_plug_and_charge_auto_start/config",
     "homeassistant/number/ev_charger_max_charging_power/config",
