@@ -3,12 +3,25 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app.ha import MQTTClient
-from app.state import AdvancedChargingMode, AppState, PlugAndChargeAutoStart, SinglePhaseSwitching
+from app.ha.constants import (
+    AVAILABILITY_TOPIC,
+    PAYLOAD_AVAILABLE,
+    PAYLOAD_NOT_AVAILABLE,
+    SENSOR_EXPIRE_AFTER,
+)
+from app.state import (
+    AdvancedChargingMode,
+    AppState,
+    PlugAndChargeAutoStart,
+    SinglePhaseSwitching,
+    StateSnapshot,
+)
 
 
 class TestMQTTRuntimeEVSelects:
@@ -352,3 +365,262 @@ class TestMQTTSwitchVtype:
 
         cfg.schedule_persist.assert_not_called()
         client._client.publish.assert_not_awaited()
+
+
+def _published(client: AsyncMock) -> dict[str, object]:
+    """Return a {topic: payload} map from a mocked client's publish calls."""
+    result: dict[str, object] = {}
+    for call in client.publish.await_args_list:
+        topic = call.args[0] if call.args else call.kwargs.get("topic")
+        payload = call.args[1] if len(call.args) > 1 else call.kwargs.get("payload")
+        result[topic] = payload
+    return result
+
+
+# Numeric/enum state topics that must never receive the string "unavailable".
+_NUMERIC_STATE_TOPICS = [
+    "ev_charger/sensor/power/state",
+    "ev_charger/sensor/session_energy/state",
+    "ev_charger/sensor/total_energy/state",
+    "ev_charger/sensor/voltage_l1/state",
+    "ev_charger/sensor/voltage_l2/state",
+    "ev_charger/sensor/voltage_l3/state",
+    "ev_charger/sensor/current_l1/state",
+    "ev_charger/sensor/current_l2/state",
+    "ev_charger/sensor/current_l3/state",
+    "ev_charger/sensor/setpoint/state",
+    "ev_charger/sensor/l1_voltage_drop_perc/state",
+    "ev_charger/sensor/l2_voltage_drop_perc/state",
+    "ev_charger/sensor/l3_voltage_drop_perc/state",
+    "ev_charger/sensor/l1_breaker_headroom/state",
+    "ev_charger/sensor/l2_breaker_headroom/state",
+    "ev_charger/sensor/l3_breaker_headroom/state",
+    "ev_charger/sensor/grid_current_l1/state",
+    "ev_charger/sensor/grid_current_l2/state",
+    "ev_charger/sensor/grid_current_l3/state",
+    "ev_charger/sensor/completion_time/state",
+    "ev_charger/sensor/ev_soc/state",
+    "ev_charger/sensor/status/state",
+]
+
+
+class TestMQTTDiscovery:
+    @pytest.mark.asyncio
+    async def test_discovery_payloads_include_availability_and_expire_after(self):
+        state = AppState()
+        cfg = MagicMock()
+        queue: asyncio.Queue = asyncio.Queue()
+        client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue)
+        client._client = AsyncMock()
+
+        await client._publish_discovery()
+
+        config_calls = [
+            call
+            for call in client._client.publish.await_args_list
+            if str(call.args[0]).startswith("homeassistant/") and call.args[1]
+        ]
+        assert config_calls, "expected discovery config payloads to be published"
+
+        for call in config_calls:
+            component = str(call.args[0]).split("/")[1]
+            payload = json.loads(call.args[1])
+            assert payload["availability_topic"] == AVAILABILITY_TOPIC
+            assert payload["payload_available"] == PAYLOAD_AVAILABLE
+            assert payload["payload_not_available"] == PAYLOAD_NOT_AVAILABLE
+            if component == "sensor":
+                assert payload["expire_after"] == SENSOR_EXPIRE_AFTER
+            else:
+                assert "expire_after" not in payload
+
+
+class TestMQTTPublishStateTransientErrors:
+    """A transient-error window must never put a non-numeric string on a numeric topic."""
+
+    @pytest.mark.asyncio
+    async def test_all_none_snapshot_publishes_no_unavailable_strings(self):
+        state = AppState()
+        cfg = MagicMock()
+        queue: asyncio.Queue = asyncio.Queue()
+        client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue)
+        client._client = AsyncMock()
+
+        # Every numeric/enum/comm field is None (startup / stale / comms failure).
+        snapshot = StateSnapshot()
+        await client._publish_state(snapshot)
+
+        published = _published(client._client)
+
+        # No topic ever receives the literal "unavailable".
+        assert "unavailable" not in published.values()
+
+        # None-valued numeric/enum topics are not published at all.
+        for topic in _NUMERIC_STATE_TOPICS:
+            assert topic not in published, f"{topic} should be skipped when value is None"
+
+        # Switch/select echoes are skipped when unknown.
+        assert "ev_charger/select/advanced_charging_mode/state" not in published
+        assert "ev_charger/switch/single_phase_switching/state" not in published
+        assert "ev_charger/switch/plug_and_charge_auto_start/state" not in published
+
+        # Binary comm sensors are skipped when None (never "unavailable").
+        for slug in (
+            "comm_wifi_router",
+            "comm_iot_cloud",
+            "comm_inverter",
+            "comm_mid_meter",
+            "comm_gw_meter",
+            "comm_ems",
+        ):
+            assert f"ev_charger/binary_sensor/{slug}/state" not in published
+
+        # Always-safe fields still publish.
+        assert published["ev_charger/binary_sensor/connected/state"] == "OFF"
+        assert "ev_charger/sensor/uptime/state" in published
+
+    @pytest.mark.asyncio
+    async def test_happy_path_snapshot_publishes_numeric_values(self):
+        state = AppState()
+        cfg = MagicMock()
+        queue: asyncio.Queue = asyncio.Queue()
+        client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue)
+        client._client = AsyncMock()
+
+        snapshot = StateSnapshot(
+            ev_active_power_w=1500.0,
+            ev_soc_pct=42.0,
+            l1_voltage_drop_pct=1.234,
+            l2_voltage_drop_pct=2.0,
+            l3_voltage_drop_pct=3.0,
+            l1_breaker_headroom_pct=50.0,
+            l2_breaker_headroom_pct=60.0,
+            l3_breaker_headroom_pct=70.0,
+            ev_charger_status_display="Charging",
+            ev_comm_wifi_router_connected=True,
+            ev_comm_iot_cloud_connected=False,
+            ev_single_phase_switching_display="Enabled",
+            ev_plug_and_charge_auto_start_display="Off",
+        )
+        await client._publish_state(snapshot)
+
+        published = _published(client._client)
+        assert published["ev_charger/sensor/power/state"] == "1500.0"
+        assert published["ev_charger/sensor/ev_soc/state"] == "42.0"
+        assert published["ev_charger/sensor/l1_voltage_drop_perc/state"] == "1.23"
+        assert published["ev_charger/sensor/l1_breaker_headroom/state"] == "50.0"
+        assert published["ev_charger/sensor/status/state"] == "Charging"
+        assert published["ev_charger/binary_sensor/comm_wifi_router/state"] == "ON"
+        assert published["ev_charger/binary_sensor/comm_iot_cloud/state"] == "OFF"
+        assert published["ev_charger/switch/single_phase_switching/state"] == "ON"
+        assert published["ev_charger/switch/plug_and_charge_auto_start/state"] == "OFF"
+        assert "unavailable" not in published.values()
+
+
+class TestMQTTPublishConfigStateNoneEnums:
+    @pytest.mark.asyncio
+    async def test_config_state_skips_unknown_runtime_enums(self):
+        state = AppState(
+            ev_advanced_charging_mode_enum=None,
+            ev_plug_and_charge_auto_start_enum=None,
+            ev_single_phase_switching_enum=None,
+        )
+        cfg = MagicMock()
+        queue: asyncio.Queue = asyncio.Queue()
+        client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue)
+        client._client = AsyncMock()
+
+        await client._publish_config_state()
+
+        published = _published(client._client)
+        assert "unavailable" not in published.values()
+        assert "ev_charger/select/advanced_charging_mode/state" not in published
+        assert "ev_charger/switch/plug_and_charge_auto_start/state" not in published
+        assert "ev_charger/switch/single_phase_switching/state" not in published
+
+        # Always-valid pairs still publish, with retain=True.
+        client._client.publish.assert_any_await("ev_charger/select/mode/state", str(state.charge_mode), retain=True)
+        client._client.publish.assert_any_await(
+            "ev_charger/switch/eco_day_min_charge/state",
+            "ON" if state.eco_day_min_charge_enabled else "OFF",
+            retain=True,
+        )
+
+
+class TestMQTTRunLoopAvailability:
+    @pytest.mark.asyncio
+    async def test_run_loop_publishes_available_after_connect(self):
+        state = AppState(mqtt_host="broker", mqtt_port=1883)
+        cfg = MagicMock()
+        queue: asyncio.Queue = asyncio.Queue()
+        client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue)
+
+        mqtt_client = AsyncMock()
+        mqtt_context = AsyncMock()
+        mqtt_context.__aenter__.return_value = mqtt_client
+        mqtt_context.__aexit__.return_value = False
+
+        class StopLoopError(Exception):
+            pass
+
+        async def _gather_and_stop(*aws):
+            for aw in aws:
+                await aw
+            raise StopLoopError
+
+        with (
+            patch("app.ha.client._throttle"),
+            patch("app.ha.client.aiomqtt.Client", return_value=mqtt_context) as client_ctor,
+            patch.object(client, "_publish_discovery", new_callable=AsyncMock),
+            patch.object(client, "_publish_config_state", new_callable=AsyncMock),
+            patch.object(client, "_drain_queue", new_callable=AsyncMock),
+            patch.object(client, "_process_messages", new_callable=AsyncMock),
+            patch("app.ha.client.asyncio.gather", new=AsyncMock(side_effect=_gather_and_stop)),
+            pytest.raises(StopLoopError),
+        ):
+            await client.run_loop()
+
+        mqtt_client.publish.assert_any_await(AVAILABILITY_TOPIC, PAYLOAD_AVAILABLE, retain=True)
+        # An LWT marking the device offline is configured on the client.
+        assert "will" in client_ctor.call_args.kwargs
+        will = client_ctor.call_args.kwargs["will"]
+        assert will.topic == AVAILABILITY_TOPIC
+        assert will.payload == PAYLOAD_NOT_AVAILABLE
+
+
+class TestMQTTShutdownAvailability:
+    @pytest.mark.asyncio
+    async def test_shutdown_publishes_offline(self):
+        state = AppState()
+        cfg = MagicMock()
+        queue: asyncio.Queue = asyncio.Queue()
+        client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue)
+        client._client = AsyncMock()
+
+        await client.shutdown()
+
+        client._client.publish.assert_any_await(AVAILABILITY_TOPIC, PAYLOAD_NOT_AVAILABLE, retain=True)
+
+
+class TestMQTTRuntimeSelectNoneConfirm:
+    @pytest.mark.asyncio
+    async def test_runtime_select_none_readback_skips_echo_and_disconnects(self):
+        state = AppState(charge_mode="Standby")
+        cfg = MagicMock()
+        queue: asyncio.Queue = asyncio.Queue()
+        ev = AsyncMock()
+        ev.connected = True
+        ev.ensure_connected = AsyncMock()
+        ev.disconnect = AsyncMock()
+        ev.write_advanced_charging_mode = AsyncMock(return_value=True)
+        ev.read_advanced_charging_mode = AsyncMock(return_value=None)
+
+        client = MQTTClient(state=state, config_manager=cfg, publish_queue=queue, ev_client=ev)
+        client._client = AsyncMock()
+
+        await client._handle_command("ev_charger/select/advanced_charging_mode/set", "PV charging")
+
+        published = _published(client._client)
+        assert "unavailable" not in published.values()
+        assert "ev_charger/select/advanced_charging_mode/state" not in published
+        # Standby exception path still disconnects.
+        ev.disconnect.assert_awaited_once()

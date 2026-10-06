@@ -12,6 +12,9 @@ from app.backoff import exponential_backoff
 from app.config import ConfigManager
 from app.control import normalise_hhmm, validate_hhmm
 from app.ha.constants import (
+    AVAILABILITY_TOPIC as _AVAILABILITY_TOPIC,
+)
+from app.ha.constants import (
     COMMAND_MAP as _COMMAND_MAP,
 )
 from app.ha.constants import (
@@ -24,6 +27,12 @@ from app.ha.constants import (
     NUMBER_RANGES as _NUMBER_RANGES,
 )
 from app.ha.constants import (
+    PAYLOAD_AVAILABLE as _PAYLOAD_AVAILABLE,
+)
+from app.ha.constants import (
+    PAYLOAD_NOT_AVAILABLE as _PAYLOAD_NOT_AVAILABLE,
+)
+from app.ha.constants import (
     PREFIX as _PREFIX,
 )
 from app.ha.constants import (
@@ -31,6 +40,9 @@ from app.ha.constants import (
 )
 from app.ha.constants import (
     SELECT_OPTIONS as _SELECT_OPTIONS,
+)
+from app.ha.constants import (
+    SENSOR_EXPIRE_AFTER as _SENSOR_EXPIRE_AFTER,
 )
 from app.ha.constants import (
     VEHICLE_SOC_TOPIC as _VEHICLE_SOC_TOPIC,
@@ -104,7 +116,19 @@ class MQTTClient:
                 "object_id": unique_id,
                 "state_topic": entity["state_topic"],
                 "device": _device_payload(self._state),
+                # Shared availability channel: unavailability is signalled here
+                # (and via the MQTT LWT), never by writing a string into a state topic.
+                "availability_topic": _AVAILABILITY_TOPIC,
+                "payload_available": _PAYLOAD_AVAILABLE,
+                "payload_not_available": _PAYLOAD_NOT_AVAILABLE,
             }
+
+            # Sensors use expire_after so a sustained gap in valid readings (we skip
+            # publishing rather than writing a non-numeric value) makes HA mark the
+            # entity "unknown". Controls (select/switch/number/text) and binary_sensors
+            # keep their last-good retained value, so expire_after is not applied there.
+            if component == "sensor":
+                payload["expire_after"] = _SENSOR_EXPIRE_AFTER
 
             # Optional fields
             if "unit_of_measurement" in entity:
@@ -134,70 +158,66 @@ class MQTTClient:
     # ------------------------------------------------------------------
 
     async def _publish_state(self, snapshot: StateSnapshot) -> None:
-        """Publish all sensor values from a StateSnapshot to their state topics."""
+        """Publish all sensor values from a StateSnapshot to their state topics.
+
+        Availability policy (see constants.py): a numeric/enum state topic only ever
+        receives a valid value. When a value is None (startup, stale data, transient
+        upstream error), the publish is skipped rather than writing the string
+        "unavailable" — HA keeps the last-good retained value and expire_after
+        eventually flips the sensor to "unknown". Whole-integration offline is handled
+        separately via the shared availability topic / LWT.
+        """
         assert self._client is not None  # noqa: S101
 
-        def _fmt(value: Any) -> str:
+        async def _pub_if(topic: str, value: Any, *, retain: bool = False) -> None:
+            """Publish value to topic, skipping entirely when value is None."""
             if value is None:
-                return "unavailable"
+                return
+            await self._client.publish(topic, value, retain=retain)
+
+        def _fmt(value: Any) -> str | None:
+            if value is None:
+                return None
             return str(value)
 
-        def _fmt_drop(value: float | None) -> str:
+        def _fmt_drop(value: float | None) -> str | None:
             if value is None:
-                return "unavailable"
+                return None
             return str(round(value, 2))
 
-        def _fmt_binary(value: bool | None) -> str:
+        def _fmt_binary(value: bool | None) -> str | None:
             if value is None:
-                return "unavailable"
+                return None
             return "ON" if value else "OFF"
 
         # Sensors
-        await self._client.publish(f"{_PREFIX}/sensor/power/state", _fmt(snapshot.ev_active_power_w))
-        await self._client.publish(f"{_PREFIX}/sensor/session_energy/state", _fmt(snapshot.ev_session_energy_wh))
-        await self._client.publish(f"{_PREFIX}/sensor/total_energy/state", _fmt(snapshot.ev_total_energy_wh))
-        await self._client.publish(f"{_PREFIX}/sensor/voltage_l1/state", _fmt(snapshot.ev_voltage_l1_v))
-        await self._client.publish(f"{_PREFIX}/sensor/voltage_l2/state", _fmt(snapshot.ev_voltage_l2_v))
-        await self._client.publish(f"{_PREFIX}/sensor/voltage_l3/state", _fmt(snapshot.ev_voltage_l3_v))
-        await self._client.publish(f"{_PREFIX}/sensor/current_l1/state", _fmt(snapshot.ev_current_a))
-        await self._client.publish(f"{_PREFIX}/sensor/current_l2/state", _fmt(snapshot.ev_current_b))
-        await self._client.publish(f"{_PREFIX}/sensor/current_l3/state", _fmt(snapshot.ev_current_c))
-        await self._client.publish(f"{_PREFIX}/sensor/setpoint/state", _fmt(snapshot.commanded_setpoint_w))
-        await self._client.publish(
-            f"{_PREFIX}/sensor/l1_voltage_drop_perc/state",
-            _fmt_drop(snapshot.l1_voltage_drop_pct),
-        )
-        await self._client.publish(
-            f"{_PREFIX}/sensor/l2_voltage_drop_perc/state",
-            _fmt_drop(snapshot.l2_voltage_drop_pct),
-        )
-        await self._client.publish(
-            f"{_PREFIX}/sensor/l3_voltage_drop_perc/state",
-            _fmt_drop(snapshot.l3_voltage_drop_pct),
-        )
-        await self._client.publish(
-            f"{_PREFIX}/sensor/l1_breaker_headroom/state",
-            _fmt_drop(snapshot.l1_breaker_headroom_pct),
-        )
-        await self._client.publish(
-            f"{_PREFIX}/sensor/l2_breaker_headroom/state",
-            _fmt_drop(snapshot.l2_breaker_headroom_pct),
-        )
-        await self._client.publish(
-            f"{_PREFIX}/sensor/l3_breaker_headroom/state",
-            _fmt_drop(snapshot.l3_breaker_headroom_pct),
-        )
-        await self._client.publish(f"{_PREFIX}/sensor/grid_current_l1/state", _fmt(snapshot.victron_l1_current_a))
-        await self._client.publish(f"{_PREFIX}/sensor/grid_current_l2/state", _fmt(snapshot.victron_l2_current_a))
-        await self._client.publish(f"{_PREFIX}/sensor/grid_current_l3/state", _fmt(snapshot.victron_l3_current_a))
-        await self._client.publish(f"{_PREFIX}/sensor/completion_time/state", _fmt(snapshot.ev_completion_time_h))
-        await self._client.publish(f"{_PREFIX}/sensor/ev_soc/state", _fmt(snapshot.ev_soc_pct))
-        await self._client.publish(f"{_PREFIX}/sensor/status/state", _fmt(snapshot.ev_charger_status_display))
-        await self._client.publish(
+        await _pub_if(f"{_PREFIX}/sensor/power/state", _fmt(snapshot.ev_active_power_w))
+        await _pub_if(f"{_PREFIX}/sensor/session_energy/state", _fmt(snapshot.ev_session_energy_wh))
+        await _pub_if(f"{_PREFIX}/sensor/total_energy/state", _fmt(snapshot.ev_total_energy_wh))
+        await _pub_if(f"{_PREFIX}/sensor/voltage_l1/state", _fmt(snapshot.ev_voltage_l1_v))
+        await _pub_if(f"{_PREFIX}/sensor/voltage_l2/state", _fmt(snapshot.ev_voltage_l2_v))
+        await _pub_if(f"{_PREFIX}/sensor/voltage_l3/state", _fmt(snapshot.ev_voltage_l3_v))
+        await _pub_if(f"{_PREFIX}/sensor/current_l1/state", _fmt(snapshot.ev_current_a))
+        await _pub_if(f"{_PREFIX}/sensor/current_l2/state", _fmt(snapshot.ev_current_b))
+        await _pub_if(f"{_PREFIX}/sensor/current_l3/state", _fmt(snapshot.ev_current_c))
+        await _pub_if(f"{_PREFIX}/sensor/setpoint/state", _fmt(snapshot.commanded_setpoint_w))
+        await _pub_if(f"{_PREFIX}/sensor/l1_voltage_drop_perc/state", _fmt_drop(snapshot.l1_voltage_drop_pct))
+        await _pub_if(f"{_PREFIX}/sensor/l2_voltage_drop_perc/state", _fmt_drop(snapshot.l2_voltage_drop_pct))
+        await _pub_if(f"{_PREFIX}/sensor/l3_voltage_drop_perc/state", _fmt_drop(snapshot.l3_voltage_drop_pct))
+        await _pub_if(f"{_PREFIX}/sensor/l1_breaker_headroom/state", _fmt_drop(snapshot.l1_breaker_headroom_pct))
+        await _pub_if(f"{_PREFIX}/sensor/l2_breaker_headroom/state", _fmt_drop(snapshot.l2_breaker_headroom_pct))
+        await _pub_if(f"{_PREFIX}/sensor/l3_breaker_headroom/state", _fmt_drop(snapshot.l3_breaker_headroom_pct))
+        await _pub_if(f"{_PREFIX}/sensor/grid_current_l1/state", _fmt(snapshot.victron_l1_current_a))
+        await _pub_if(f"{_PREFIX}/sensor/grid_current_l2/state", _fmt(snapshot.victron_l2_current_a))
+        await _pub_if(f"{_PREFIX}/sensor/grid_current_l3/state", _fmt(snapshot.victron_l3_current_a))
+        await _pub_if(f"{_PREFIX}/sensor/completion_time/state", _fmt(snapshot.ev_completion_time_h))
+        await _pub_if(f"{_PREFIX}/sensor/ev_soc/state", _fmt(snapshot.ev_soc_pct))
+        await _pub_if(f"{_PREFIX}/sensor/status/state", _fmt(snapshot.ev_charger_status_display))
+        await _pub_if(
             f"{_PREFIX}/sensor/comm_connection_status/state",
             _fmt(snapshot.ev_comm_connection_status_raw),
         )
-        await self._client.publish(
+        await _pub_if(
             f"{_PREFIX}/select/advanced_charging_mode/state",
             _fmt(snapshot.ev_advanced_charging_mode_display),
             retain=True,
@@ -208,48 +228,49 @@ class MQTTClient:
             f"{_PREFIX}/binary_sensor/connected/state",
             "ON" if snapshot.ev_connected else "OFF",
         )
-        await self._client.publish(
+        await _pub_if(
             f"{_PREFIX}/binary_sensor/comm_wifi_router/state",
             _fmt_binary(snapshot.ev_comm_wifi_router_connected),
         )
-        await self._client.publish(
+        await _pub_if(
             f"{_PREFIX}/binary_sensor/comm_iot_cloud/state",
             _fmt_binary(snapshot.ev_comm_iot_cloud_connected),
         )
-        await self._client.publish(
+        await _pub_if(
             f"{_PREFIX}/binary_sensor/comm_inverter/state",
             _fmt_binary(snapshot.ev_comm_inverter_online),
         )
-        await self._client.publish(
+        await _pub_if(
             f"{_PREFIX}/binary_sensor/comm_mid_meter/state",
             _fmt_binary(snapshot.ev_comm_mid_meter_online),
         )
-        await self._client.publish(
+        await _pub_if(
             f"{_PREFIX}/binary_sensor/comm_gw_meter/state",
             _fmt_binary(snapshot.ev_comm_gw_meter_online),
         )
-        await self._client.publish(
+        await _pub_if(
             f"{_PREFIX}/binary_sensor/comm_ems/state",
             _fmt_binary(snapshot.ev_comm_ems_online),
         )
 
-        # Switch
-        switch_state = "unavailable"
+        # Switch — skip (keep last-good retained) when the state is unknown rather than
+        # writing an invalid "unavailable" payload.
+        switch_state: str | None = None
         if snapshot.ev_single_phase_switching_display == "Enabled":
             switch_state = "ON"
         elif snapshot.ev_single_phase_switching_display == "Disabled":
             switch_state = "OFF"
-        await self._client.publish(
+        await _pub_if(
             f"{_PREFIX}/switch/single_phase_switching/state",
             switch_state,
             retain=True,
         )
-        plug_and_charge_state = "unavailable"
+        plug_and_charge_state: str | None = None
         if snapshot.ev_plug_and_charge_auto_start_display == "On":
             plug_and_charge_state = "ON"
         elif snapshot.ev_plug_and_charge_auto_start_display == "Off":
             plug_and_charge_state = "OFF"
-        await self._client.publish(
+        await _pub_if(
             f"{_PREFIX}/switch/plug_and_charge_auto_start/state",
             plug_and_charge_state,
             retain=True,
@@ -290,32 +311,30 @@ class MQTTClient:
             (f"{_PREFIX}/text/ev_charger_ip/state", s.ev_charger_ip),
             (f"{_PREFIX}/text/victron_ip/state", s.victron_ip),
             (
-                f"{_PREFIX}/select/advanced_charging_mode/state",
-                s.ev_advanced_charging_mode_enum.display_name
-                if s.ev_advanced_charging_mode_enum is not None
-                else "unavailable",
-            ),
-            (
-                f"{_PREFIX}/switch/plug_and_charge_auto_start/state",
-                "ON"
-                if s.ev_plug_and_charge_auto_start_enum == PlugAndChargeAutoStart.ON
-                else "OFF"
-                if s.ev_plug_and_charge_auto_start_enum == PlugAndChargeAutoStart.OFF
-                else "unavailable",
-            ),
-            (
-                f"{_PREFIX}/switch/single_phase_switching/state",
-                "ON"
-                if s.ev_single_phase_switching_enum == SinglePhaseSwitching.ENABLED
-                else "OFF"
-                if s.ev_single_phase_switching_enum == SinglePhaseSwitching.DISABLED
-                else "unavailable",
-            ),
-            (
                 f"{_PREFIX}/switch/eco_day_min_charge/state",
                 "ON" if s.eco_day_min_charge_enabled else "OFF",
             ),
         ]
+
+        # Runtime enum/switch echoes: these may be unknown (None) when the charger has
+        # not been read yet. Only publish when a valid value exists — never write
+        # "unavailable" to a select/switch state topic (it is not a valid option/payload).
+        if s.ev_advanced_charging_mode_enum is not None:
+            pairs.append(
+                (
+                    f"{_PREFIX}/select/advanced_charging_mode/state",
+                    s.ev_advanced_charging_mode_enum.display_name,
+                )
+            )
+        if s.ev_plug_and_charge_auto_start_enum == PlugAndChargeAutoStart.ON:
+            pairs.append((f"{_PREFIX}/switch/plug_and_charge_auto_start/state", "ON"))
+        elif s.ev_plug_and_charge_auto_start_enum == PlugAndChargeAutoStart.OFF:
+            pairs.append((f"{_PREFIX}/switch/plug_and_charge_auto_start/state", "OFF"))
+        if s.ev_single_phase_switching_enum == SinglePhaseSwitching.ENABLED:
+            pairs.append((f"{_PREFIX}/switch/single_phase_switching/state", "ON"))
+        elif s.ev_single_phase_switching_enum == SinglePhaseSwitching.DISABLED:
+            pairs.append((f"{_PREFIX}/switch/single_phase_switching/state", "OFF"))
+
         for topic, value in pairs:
             await self._client.publish(topic, value, retain=True)
 
@@ -506,21 +525,33 @@ class MQTTClient:
             if not ok:
                 return
             confirmed = await reader()
+            # Readback confirmation: only echo a valid value to the state topic. When the
+            # readback is unknown, skip the publish (keep last-good retained) rather than
+            # writing "unavailable", which is not a valid select option / switch payload.
+            state_value: str | None = None
             if attr == "ev_single_phase_switching":
-                state_value = "ON" if confirmed == SinglePhaseSwitching.ENABLED else "OFF"
+                if confirmed == SinglePhaseSwitching.ENABLED:
+                    state_value = "ON"
+                elif confirmed == SinglePhaseSwitching.DISABLED:
+                    state_value = "OFF"
             elif attr == "ev_plug_and_charge_auto_start":
                 if confirmed == PlugAndChargeAutoStart.ON:
                     state_value = "ON"
                 elif confirmed == PlugAndChargeAutoStart.OFF:
                     state_value = "OFF"
-                else:
-                    state_value = "unavailable"
-            else:
-                state_value = confirmed.display_name if confirmed is not None else "unavailable"
+            elif confirmed is not None:
+                state_value = confirmed.display_name
 
-            state_topic = _CMD_TO_STATE_TOPIC.get(topic)
-            if state_topic and self._client is not None:
-                await self._client.publish(state_topic, state_value, retain=True)
+            if state_value is None:
+                _throttle.warning(
+                    f"runtime_ev_readback_{attr}",
+                    "Runtime EV command readback for %s returned no valid value; skipping state echo",
+                    attr,
+                )
+            else:
+                state_topic = _CMD_TO_STATE_TOPIC.get(topic)
+                if state_topic and self._client is not None:
+                    await self._client.publish(state_topic, state_value, retain=True)
         finally:
             if standby_override:
                 await self._ev_client.disconnect()
@@ -539,6 +570,11 @@ class MQTTClient:
                     port=self._state.mqtt_port,
                     username=self._state.mqtt_username,
                     password=self._state.mqtt_password,
+                    will=aiomqtt.Will(
+                        topic=_AVAILABILITY_TOPIC,
+                        payload=_PAYLOAD_NOT_AVAILABLE,
+                        retain=True,
+                    ),
                 ) as client:
                     self._client = client
                     attempt = 0
@@ -563,6 +599,9 @@ class MQTTClient:
 
                     # Publish current config state
                     await self._publish_config_state()
+
+                    # Mark the integration available now that discovery/config are published.
+                    await client.publish(_AVAILABILITY_TOPIC, _PAYLOAD_AVAILABLE, retain=True)
 
                     # Concurrently drain publish_queue and process incoming messages
                     await asyncio.gather(
@@ -624,6 +663,11 @@ class MQTTClient:
         """Publish empty payloads to all discovery topics for graceful removal."""
         if self._client is None:
             return
+        # Mark offline via the shared availability channel before tearing down discovery.
+        try:
+            await self._client.publish(_AVAILABILITY_TOPIC, _PAYLOAD_NOT_AVAILABLE, retain=True)
+        except aiomqtt.MqttError:
+            logger.warning("Failed to publish offline availability on shutdown")
         for entity in ENTITIES:
             component = entity["component"]
             unique_id = entity["unique_id"]
