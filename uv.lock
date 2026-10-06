@@ -64,7 +64,7 @@ wheels = [
 
 [[package]]
 name = "ev-charger-integration"
-version = "0.1.0"
+version = "0.1.12"
 source = { virtual = "." }
 dependencies = [
     { name = "aiomqtt" },
