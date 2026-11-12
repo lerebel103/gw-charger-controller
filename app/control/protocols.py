@@ -14,6 +14,7 @@ import asyncio
 from collections.abc import Awaitable
 from typing import Protocol
 
+from app.control.breaker_state import BreakerLimiterState, PhaseSample
 from app.state import AppState, ChargeModeState, ChargeSessionState
 
 
@@ -39,16 +40,15 @@ class SamplingLoopProtocol(Protocol):
     _state: AppState
     _grid_power_samples: list[tuple[float, float]]
     _battery_power_samples: list[tuple[float, float]]
-    _l1_current_samples: list[tuple[float, float]]
-    _l2_current_samples: list[tuple[float, float]]
-    _l3_current_samples: list[tuple[float, float]]
-    _breaker_cap_tripped: bool
+    _phase_samples: list[list[PhaseSample]]
+    _breaker: BreakerLimiterState
 
 
 class ModeLoopProtocol(SamplingLoopProtocol, Protocol):
     """Loop fields needed by mode setpoint strategies."""
 
     _state_machine: StateMachineProtocol
+    _charge_mode_state: ChargeModeState
     _eco_charging: bool
     _eco_day_setpoint_w: float
     _eco_day_battery_full: bool
