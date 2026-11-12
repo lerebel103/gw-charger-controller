@@ -49,9 +49,13 @@ Export never creates headroom and never offsets import on another phase.
 1. **Standby**: reset limiter state and return the setpoint untouched. No Modbus activity is added.
 2. **Fail-safe** (all modes, including Manual and Eco-night): if grid power, grid current or the raw EV
    current is missing, stale or implausible on any phase, count the cycle. For the first two consecutive
-   cycles hold the last decision. From the **3rd** consecutive cycle return the minimum charge power
-   (4400 W) with a throttled WARNING. A stopped latch stays stopped while data is missing. Recovery is
-   gradual (see release).
+   cycles (the debounce window) the limiter **holds**: the output is `min(setpoint, last applied output)`,
+   where the last applied output is the last value returned on a valid cycle (the minimum charge power if
+   there is none, e.g. the session just started). The output can stay the same or go down but never ramps
+   up on bad data; an active cap is still honoured. From the **3rd** consecutive cycle (about 20 s at a
+   10 s loop interval) return the minimum charge power (4400 W) with a throttled WARNING. A stopped latch
+   stays at 0 while data is missing. On valid data normal behaviour resumes, and an active cap keeps its
+   gradual release (see release).
    *Plausibility*: `|P_grid| > 1.05 x V x I_grid + 50 W` marks the phase data implausible; it counts as missing.
 3. **Stop latch release** (evaluated before the zero-setpoint early return, so it can release while the
    setpoint is 0): release only when on every phase a restart at the minimum fits with margin:
@@ -142,8 +146,9 @@ Synthetic single-phase trim: base load 3.0 kW on L1, car follows `setpoint / 3`.
 ## 10. Edge cases
 
 - Car stops drawing (all `I_ev` <= 0.5 A): no EV-active phase, no cap; overload is only warned about.
-- Phase data implausible or missing: fail-safe after 3 cycles, in every mode (behaviour change: Manual and
-  Eco-night used to pass the setpoint through unlimited).
+- Phase data implausible or missing: hold at the last applied output for 2 cycles, then the minimum from
+  the 3rd (about 20 s at a 10 s loop), in every mode (behaviour change: Manual and Eco-night used to pass
+  the setpoint through unlimited).
 - First cycles with no history: not treated as missing; the limit uses the samples available.
 - Limiter stop while the session state machine still believes it is charging: same as before (stop is applied
   after the state machine); not redesigned here.
@@ -159,7 +164,7 @@ Synthetic single-phase trim: base load 3.0 kW on L1, car follows `setpoint / 3`.
 | Single-phase trim, x3 mapping, hysteresis, gradual release | `TestSinglePhaseTrimAndRelease` |
 | Fast trip, stop latch, restart | `TestFastTripAndStop` |
 | Export-only, non-EV phase, three-phase car | `TestExportAndPhases` |
-| Missing / implausible data fail-safe (Manual and Eco) | `TestFailSafe` |
+| Missing / implausible data: hold for 2 cycles (higher request held, lower passes, no prior value gives minimum), minimum on the 3rd, resume on valid data; pinned Manual, Eco-day and Eco-night | `TestFailSafe` |
 | Current guard (PF < 1) | `TestCurrentGuard` |
 | Edges, run_loop integration | `TestEdges`, `TestRunLoopIntegration` |
 | Eco anti-windup | `test_breaker_eco_antiwindup.py` |

@@ -10,7 +10,8 @@ Design summary (see docs/grid-power-scaling.md):
   anchored to measured EV power rather than to the setpoint.
 * Only EV-active phases can be relieved by throttling the EV. Overload on any other phase
   is logged but never capped.
-* Missing, stale or implausible data fails safe to the minimum charge power in every mode.
+* Missing, stale or implausible data holds at the last applied output for the debounce window, then
+  fails safe to the minimum charge power in every mode.
 """
 
 import logging
@@ -232,9 +233,13 @@ def limit_phase_current(loop: SamplingLoopProtocol, setpoint: float, now: float 
                 _MIN_CHARGE_W,
             )
             return _MIN_CHARGE_W
-        if b.cap_w is None:
-            return setpoint
-        return min(setpoint, max(b.cap_w, _MIN_CHARGE_W))
+        # Debounce window: hold. Never ramp above the last output applied on a valid cycle
+        # (the minimum if there is none); the setpoint may stay the same or go down.
+        held = _MIN_CHARGE_W if b.last_applied_w is None else b.last_applied_w
+        result = min(setpoint, held)
+        if b.cap_w is not None:
+            result = min(result, max(b.cap_w, _MIN_CHARGE_W))
+        return result
     if b.missing_cycles:
         b.missing_cycles = 0
         _throttle.clear("breaker_failsafe")
@@ -244,6 +249,7 @@ def limit_phase_current(loop: SamplingLoopProtocol, setpoint: float, now: float 
     # --- Stop latch (evaluated before the setpoint<=0 early return so it can release) ----
     if b.stopped:
         if not all(ph.can_restart_at_minimum() for ph in phases):
+            b.last_applied_w = None
             return 0.0
         b.stopped = False
         b.cap_w = _MIN_CHARGE_W
@@ -253,6 +259,7 @@ def limit_phase_current(loop: SamplingLoopProtocol, setpoint: float, now: float 
         logger.info("Breaker protection: grid import recovered, releasing stop latch (restart capped at minimum)")
 
     if setpoint <= 0:
+        b.last_applied_w = None
         if not b.stopped:
             if not b.restart_at_minimum:
                 b.cap_w = None
@@ -322,6 +329,7 @@ def limit_phase_current(loop: SamplingLoopProtocol, setpoint: float, now: float 
                 "Breaker protection: still overloaded after %d cycles at minimum power; stopping charger",
                 _BREAKER_STOP_CYCLES,
             )
+            b.last_applied_w = None
             return 0.0
     else:
         b.min_overload_cycles = 0
@@ -338,4 +346,5 @@ def limit_phase_current(loop: SamplingLoopProtocol, setpoint: float, now: float 
             if b.cap_w is not None:
                 result = min(setpoint, max(b.cap_w, _MIN_CHARGE_W))
 
-    return min(result, _MAX_CHARGE_W)
+    b.last_applied_w = min(result, _MAX_CHARGE_W)
+    return b.last_applied_w

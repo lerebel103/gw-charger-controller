@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 import pytest
 
-from app.control import breaker
+from app.control import breaker, time_utils
 from app.control.breaker import (
     limit_phase_current,
     mean_phase_import_w,
@@ -21,6 +22,7 @@ from app.control.constants import (
     _MIN_CHARGE_W,
     _PHASE_IMPORT_MEAN_WINDOW_S,
 )
+from app.control.mode_strategies import resolve_mode_handler
 from app.log_throttle import LogThrottle
 from tests.unit.breaker_helpers import P_LIM, V, make_state, run_cycle, set_inputs
 from tests.unit.helpers import make_ns_loop
@@ -38,6 +40,30 @@ def _fresh_throttle(monkeypatch, caplog):
 def _loop(**state_overrides):
     state = make_state(**state_overrides)
     return make_ns_loop(state), state
+
+
+def _pinned_mode_loop(monkeypatch, mode, night, expected_handler):
+    """Loop whose mode resolution is pinned (clock fixed inside/outside the discharge window)."""
+    pinned = datetime(2026, 1, 15, 2, 0, 0) if night else datetime(2026, 1, 15, 12, 0, 0)  # noqa: DTZ001
+
+    class _FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return pinned
+
+    monkeypatch.setattr(time_utils, "datetime", _FixedDatetime)
+    loop, state = _loop(
+        charge_mode=mode,
+        ev_connected=True,
+        ev_comm_healthy=True,
+        ev_soc_pct=50.0,
+        ev_max_soc_pct=80.0,
+        solar_battery_discharge_start="23:00",
+        solar_battery_discharge_end="06:00",
+    )
+    # Assert the intended mode path is the one actually resolved for this case.
+    assert resolve_mode_handler(loop).name == expected_handler
+    return loop, state
 
 
 def _warmup(loop, state, t0=0.0, cycles=4, setpoint=11000.0, p=(1500.0, -1000.0, -1000.0), ev_w=(1467.0, 0.0, 0.0)):
@@ -337,17 +363,59 @@ class TestExportAndPhases:
 # Missing / implausible data: fail-safe in ALL modes
 # ---------------------------------------------------------------------------
 class TestFailSafe:
-    @pytest.mark.parametrize("mode", ["Manual", "Eco"])
-    def test_missing_power_for_n_cycles_drops_to_minimum(self, mode, caplog):
-        loop, state = _loop(charge_mode=mode)
+    @pytest.mark.parametrize(
+        ("mode", "night", "handler"),
+        [("Manual", False, "manual"), ("Eco", False, "eco_day"), ("Eco", True, "eco_night")],
+        ids=["manual", "eco-day", "eco-night"],
+    )
+    def test_missing_power_for_n_cycles_drops_to_minimum(self, mode, night, handler, caplog, monkeypatch):
+        loop, state = _pinned_mode_loop(monkeypatch, mode, night, handler)
         t = _warmup(loop, state)
         set_inputs(state, (None, -1000.0, -1000.0), ev_w=(1467.0, 0.0, 0.0))
         out = []
         for _ in range(3):
             out.append(run_cycle(loop, 11000.0, t))
             t += CYCLE_S
-        assert out == [11000.0, 11000.0, _MIN_CHARGE_W]  # debounced: only on the 3rd cycle
+        # Debounce holds at the last applied value (11000 W), then drops to the minimum on the 3rd cycle.
+        assert out == [11000.0, 11000.0, _MIN_CHARGE_W]
         assert any(r.levelno == logging.WARNING and "missing" in r.message for r in caplog.records)
+
+    @pytest.mark.parametrize(
+        ("mode", "night", "handler"),
+        [("Manual", False, "manual"), ("Eco", False, "eco_day"), ("Eco", True, "eco_night")],
+        ids=["manual", "eco-day", "eco-night"],
+    )
+    def test_debounce_holds_last_applied_and_never_ramps_up(self, mode, night, handler, monkeypatch):
+        loop, state = _pinned_mode_loop(monkeypatch, mode, night, handler)
+        t = _warmup(loop, state, setpoint=6000.0)
+        set_inputs(state, (None, -1000.0, -1000.0), ev_w=(1467.0, 0.0, 0.0))
+        assert run_cycle(loop, 11000.0, t) == 6000.0  # (a) higher request held at last applied
+        assert run_cycle(loop, 5000.0, t + CYCLE_S) == 5000.0  # (b) lower request passes through
+        assert run_cycle(loop, 11000.0, t + 2 * CYCLE_S) == _MIN_CHARGE_W  # (d) 3rd cycle: minimum
+
+    def test_debounce_without_prior_applied_value_uses_minimum(self):
+        loop, state = _loop()
+        set_inputs(state, (None, -1000.0, -1000.0), ev_w=(1467.0, 0.0, 0.0))
+        assert loop._breaker.last_applied_w is None
+        assert run_cycle(loop, 11000.0, 0.0) == _MIN_CHARGE_W  # (c)
+        assert run_cycle(loop, 11000.0, CYCLE_S) == _MIN_CHARGE_W
+
+    def test_valid_data_resumes_normal_pass_through_after_debounce(self):
+        loop, state = _loop()
+        t = _warmup(loop, state, setpoint=6000.0)
+        set_inputs(state, (None, -1000.0, -1000.0), ev_w=(1467.0, 0.0, 0.0))
+        assert run_cycle(loop, 11000.0, t) == 6000.0
+        set_inputs(state, (1500.0, -1000.0, -1000.0), ev_w=(1467.0, 0.0, 0.0))
+        assert run_cycle(loop, 11000.0, t + CYCLE_S) == 11000.0  # (e) no cap active: straight pass-through
+        assert loop._breaker.missing_cycles == 0
+
+    def test_debounce_respects_active_cap(self):
+        loop, state = _loop()
+        t = _warmup(loop, state)
+        loop._breaker.cap_w = 5000.0
+        loop._breaker.last_applied_w = 8000.0
+        set_inputs(state, (None, -1000.0, -1000.0), ev_w=(1467.0, 0.0, 0.0))
+        assert run_cycle(loop, 11000.0, t) == 5000.0
 
     def test_recovery_is_gradual(self):
         loop, state = _loop()
