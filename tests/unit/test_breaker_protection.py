@@ -1,4 +1,4 @@
-"""Unit tests for closed-loop, import-power based main-breaker protection (app/control/breaker.py)."""
+"""Unit tests for closed-loop, signed import-current based main-breaker protection (app/control/breaker.py)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import pytest
 from app.control import breaker, time_utils
 from app.control.breaker import (
     limit_phase_current,
-    mean_phase_import_w,
+    mean_phase_import_a,
     measured_ev_phase_powers_w,
     phase_headroom_pct,
     record_phase_samples,
@@ -24,7 +24,7 @@ from app.control.constants import (
 )
 from app.control.mode_strategies import resolve_mode_handler
 from app.log_throttle import LogThrottle
-from tests.unit.breaker_helpers import P_LIM, V, make_state, run_cycle, set_inputs
+from tests.unit.breaker_helpers import I_LIM, P_LIM, V, make_state, run_cycle, set_inputs
 from tests.unit.helpers import make_ns_loop
 
 CYCLE_S = 10.0
@@ -84,10 +84,10 @@ class TestSamplingAndMeans:
         loop, state = _loop()
         set_inputs(state, (1000.0, 0.0, 0.0))
         record_phase_samples(loop, now=0.0)
-        set_inputs(state, (-3000.0, 0.0, 0.0), i=(13.0, 0.0, 0.0))
+        set_inputs(state, (-3000.0, 0.0, 0.0))
         record_phase_samples(loop, now=10.0)
-        # Export (-3000) must not offset import: mean of (1000, 0), not clamp(-1000)
-        assert mean_phase_import_w(loop, 1, now=10.0) == 500.0
+        # Export (-3000 W) must not offset import: mean of (1000 W, 0), not clamp(-1000 W)
+        assert mean_phase_import_a(loop, 1, now=10.0) == pytest.approx(500.0 / V)
 
     def test_window_prunes_old_samples(self):
         loop, state = _loop()
@@ -95,15 +95,15 @@ class TestSamplingAndMeans:
         record_phase_samples(loop, now=0.0)
         set_inputs(state, (2000.0, 0.0, 0.0))
         record_phase_samples(loop, now=_PHASE_IMPORT_MEAN_WINDOW_S + 1)
-        assert mean_phase_import_w(loop, 1) == 2000.0
+        assert mean_phase_import_a(loop, 1) == pytest.approx(2000.0 / V)
 
     def test_no_samples_returns_none(self):
         loop, _ = _loop()
-        assert mean_phase_import_w(loop, 1) is None
-        assert mean_phase_import_w(loop, 4) is None
+        assert mean_phase_import_a(loop, 1) is None
+        assert mean_phase_import_a(loop, 4) is None
         assert phase_headroom_pct(loop, 1) is None
 
-    def test_headroom_from_import_power(self):
+    def test_headroom_from_import_current(self):
         loop, state = _loop()
         set_inputs(state, (P_LIM / 2, -500.0, -500.0))
         record_phase_samples(loop, now=0.0)
@@ -114,8 +114,8 @@ class TestSamplingAndMeans:
         loop, state = _loop()
         set_inputs(state, (None, -500.0, -500.0))
         record_phase_samples(loop, now=0.0)
-        assert mean_phase_import_w(loop, 1) is None
-        assert mean_phase_import_w(loop, 2) == 0.0
+        assert mean_phase_import_a(loop, 1) is None
+        assert mean_phase_import_a(loop, 2) == 0.0
 
     def test_measured_ev_power_uses_raw_current(self):
         state = make_state(ev_current_raw_a=10.0, ev_current_raw_b=0.0, ev_current_raw_c=0.0, correction_pct=9.0)
@@ -123,12 +123,19 @@ class TestSamplingAndMeans:
         state.ev_current_raw_b = None
         assert measured_ev_phase_powers_w(state) is None
 
-    def test_voltage_falls_back_to_p_over_i_then_230(self):
-        loop, state = _loop(victron_l1_voltage_v=None, victron_l2_voltage_v=None)
-        set_inputs(state, (2300.0, 10.0, -5.0), i=(10.0, 0.5, 0.5))
+    def test_headroom_is_independent_of_voltage(self):
+        loop, state = _loop(victron_l1_voltage_v=None)
+        set_inputs(state, (None, -5.0, -5.0), i=(I_LIM / 4, -5.0, -5.0))
         record_phase_samples(loop, now=0.0)
-        # L1 P/I = 230 V -> limit uses 230 V; L2 has I<1 so falls back to 230 V
-        assert phase_headroom_pct(loop, 1, now=0.0) == pytest.approx((1 - 2300.0 / (0.8 * 32 * 230.0)) * 100)
+        assert phase_headroom_pct(loop, 1, now=0.0) == pytest.approx(75.0)
+
+    def test_cap_uses_230_v_when_grid_voltage_missing(self):
+        """Voltage only converts amps to setpoint watts; a missing reading falls back to 230 V."""
+        loop, state = _loop(victron_l1_voltage_v=None)
+        ev_a = 10.0
+        set_inputs(state, (None, None, None), i=(I_LIM + 2.0, -1.0, -1.0), ev_w=(ev_a * V, 0.0, 0.0))
+        out = [run_cycle(loop, 11000.0, k * CYCLE_S) for k in range(2)]
+        assert out[-1] == pytest.approx(3 * 230.0 * (ev_a - 2.0))
 
 
 # ---------------------------------------------------------------------------
@@ -298,8 +305,8 @@ class TestFastTripAndStop:
 class TestExportAndPhases:
     def test_export_only_with_large_positive_currents_never_caps(self):
         loop, state = _loop()
-        # Meter currents are unsigned: large positive values while exporting must be ignored
-        set_inputs(state, (-6000.0, -6000.0, -6000.0), i=(26.0, 26.0, 26.0), ev_w=(3000.0, 0.0, 0.0))
+        # Signed currents: large NEGATIVE values (export) must never count as load
+        set_inputs(state, (-6000.0, -6000.0, -6000.0), i=(-26.0, -26.0, -26.0), ev_w=(3000.0, 0.0, 0.0))
         for k in range(10):
             assert run_cycle(loop, 11000.0, k * CYCLE_S) == 11000.0
         assert loop._breaker.cap_w is None
@@ -360,7 +367,7 @@ class TestExportAndPhases:
 
 
 # ---------------------------------------------------------------------------
-# Missing / implausible data: fail-safe in ALL modes
+# Missing data: fail-safe in ALL modes
 # ---------------------------------------------------------------------------
 class TestFailSafe:
     @pytest.mark.parametrize(
@@ -368,7 +375,7 @@ class TestFailSafe:
         [("Manual", False, "manual"), ("Eco", False, "eco_day"), ("Eco", True, "eco_night")],
         ids=["manual", "eco-day", "eco-night"],
     )
-    def test_missing_power_for_n_cycles_drops_to_minimum(self, mode, night, handler, caplog, monkeypatch):
+    def test_missing_current_for_n_cycles_drops_to_minimum(self, mode, night, handler, caplog, monkeypatch):
         loop, state = _pinned_mode_loop(monkeypatch, mode, night, handler)
         t = _warmup(loop, state)
         set_inputs(state, (None, -1000.0, -1000.0), ev_w=(1467.0, 0.0, 0.0))
@@ -438,14 +445,15 @@ class TestFailSafe:
         out = [run_cycle(loop, 11000.0, t + k * CYCLE_S) for k in range(3)]
         assert out[-1] == _MIN_CHARGE_W
 
-    def test_implausible_power_counts_as_missing(self, caplog):
+    def test_inconsistent_values_are_not_missing(self, caplog):
+        """Only absent values count as missing: any signed current is used as is, whatever the other registers say."""
         loop, state = _loop()
         t = _warmup(loop, state)
-        # +5 kW import with only 1 A: physically impossible
-        set_inputs(state, (5000.0, -1000.0, -1000.0), i=(1.0, 4.3, 4.3), ev_w=(1467.0, 0.0, 0.0))
+        set_inputs(state, (None, None, None), i=(1.0, -4.3, -4.3), ev_w=(1467.0, 0.0, 0.0))
         out = [run_cycle(loop, 11000.0, t + k * CYCLE_S) for k in range(3)]
-        assert out[-1] == _MIN_CHARGE_W
-        assert any("implausible" in r.message for r in caplog.records)
+        assert out == [11000.0] * 3
+        assert loop._breaker.missing_cycles == 0
+        assert not any("missing" in r.message or "implausible" in r.message for r in caplog.records)
 
     def test_stop_latch_stays_stopped_while_data_missing(self):
         loop, state = _loop()
@@ -463,35 +471,54 @@ class TestFailSafe:
 
 
 # ---------------------------------------------------------------------------
-# Current guard (power factor < 1)
+# Current is authoritative (power factor < 1)
 # ---------------------------------------------------------------------------
-class TestCurrentGuard:
-    def test_importing_current_over_80pct_trims_even_if_power_is_under_limit(self):
+class TestCurrentIsAuthoritative:
+    def test_low_power_factor_current_over_80pct_trims(self):
+        """Real power is low (about 0.7 kW), but 27 A of signed import current is above 25.6 A: it trims."""
         loop, state = _loop()
-        # 4.5 kW is below the 5.96 kW power limit, but 27 A importing is above 25.6 A (PF ~0.72)
-        set_inputs(state, (500.0, -500.0, -500.0), i=(3.0, 3.0, 3.0), ev_w=(1467.0, 0.0, 0.0))
+        set_inputs(state, (500.0, -500.0, -500.0), ev_w=(1467.0, 0.0, 0.0))
         t = 0.0
         for _ in range(4):
             run_cycle(loop, 4400.0, t)
             t += CYCLE_S
-        set_inputs(state, (4500.0, -500.0, -500.0), i=(27.0, 3.0, 3.0), ev_w=(2000.0, 0.0, 0.0))
+        # Only the current is set: the limiter never looks at power, so low real power cannot hide it
+        set_inputs(state, (None, None, None), i=(27.0, -3.0, -3.0), ev_w=(2000.0, 0.0, 0.0))
         out = 11000.0
         for _ in range(5):
             out = run_cycle(loop, 11000.0, t)
             t += CYCLE_S
-        excess_w = (27.0 - 0.8 * 32.0) * V
-        assert 4500.0 < P_LIM
-        assert out == pytest.approx(3 * (2000.0 - excess_w), abs=1.0)
+        ev_a = 2000.0 / V
+        assert out == pytest.approx(3 * V * (ev_a - (27.0 - I_LIM)), abs=1.0)
+        assert out < 11000.0
+        assert loop._breaker.last_binding_phase == 1
 
-    def test_same_current_while_exporting_does_not_trim(self):
+    def test_same_current_magnitude_while_exporting_does_not_trim(self):
         loop, state = _loop()
-        set_inputs(state, (-4500.0, -500.0, -500.0), i=(27.0, 3.0, 3.0), ev_w=(2000.0, 0.0, 0.0))
+        set_inputs(state, (None, None, None), i=(-27.0, -3.0, -3.0), ev_w=(2000.0, 0.0, 0.0))
         for k in range(8):
             assert run_cycle(loop, 11000.0, k * CYCLE_S) == 11000.0
         assert loop._breaker.cap_w is None
 
 
-# ---------------------------------------------------------------------------
+class TestLiveSignedCurrentRegression:
+    """Live log 2026-11-13: P about 0 W with signed I = -1.8 A / -1.7 A, L3 flipping between +2.0 and -2.0 A."""
+
+    def test_signed_negative_currents_are_not_missing_and_pass_through(self, caplog):
+        loop, state = _loop(victron_l1_voltage_v=239.9, victron_l2_voltage_v=238.1, victron_l3_voltage_v=239.6)
+        l2 = (-1.8, -1.8, -1.7, -1.8, -1.8, -1.7)
+        l3 = (2.0, 2.0, -2.0, -1.9, 2.0, -2.0)
+        for k in range(12):
+            set_inputs(state, (None, None, None), i=(2.0, l2[k % 6], l3[k % 6]), ev_w=(1467.0, 0.0, 0.0))
+            assert run_cycle(loop, 11000.0, k * CYCLE_S) == 11000.0
+            assert loop._breaker.missing_cycles == 0
+            assert loop._breaker.hold_ceiling_w is None
+        assert loop._breaker.cap_w is None
+        assert not any(r.levelno >= logging.WARNING for r in caplog.records)
+        assert not any("implausible" in r.message or "missing" in r.message for r in caplog.records)
+        assert phase_headroom_pct(loop, 2, now=110.0) == 100.0  # export: full headroom, not None
+
+
 # Edge cases
 # ---------------------------------------------------------------------------
 class TestEdges:
@@ -605,13 +632,6 @@ class TestHeadroomInvalidInputs:
         assert phase_headroom_pct(loop, 1, now=1.0) is None
         assert phase_headroom_pct(loop, 2, now=1.0) == 100.0
 
-    def test_implausible_read_publishes_none(self):
-        loop, state = _loop()
-        set_inputs(state, (3000.0, -500.0, -500.0))
-        record_phase_samples(loop, now=0.0)
-        set_inputs(state, (5000.0, -500.0, -500.0), i=(1.0, 2.0, 2.0))
-        assert phase_headroom_pct(loop, 1, now=1.0) is None
-
     def test_standby_keeps_grid_only_headroom_without_ev_data(self):
         loop, state = _loop(charge_mode="Standby")
         set_inputs(state, (P_LIM / 2, -500.0, -500.0))
@@ -684,4 +704,4 @@ class TestStandbySampleInvalidation:
         assert state.commanded_setpoint_w == 11000.0
         assert cl._breaker.cap_w is None
         assert not cl._breaker.stopped
-        assert all(s.import_w == 1000.0 for s in cl._phase_samples[0])
+        assert all(s.import_a == pytest.approx(1000.0 / V) for s in cl._phase_samples[0])

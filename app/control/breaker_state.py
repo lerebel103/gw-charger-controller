@@ -8,9 +8,8 @@ class PhaseSample(NamedTuple):
     """One control-cycle observation for a single grid phase."""
 
     t: float  # monotonic seconds
-    import_w: float  # max(0, signed grid power): per-sample clamp, export never offsets import
-    import_a: float  # unsigned meter current if the phase is importing, else 0.0
-    ev_w: float  # V_ev * I_ev_raw measured on this phase
+    import_a: float  # max(0, signed grid current): per-sample clamp, export never offsets import
+    ev_a: float  # raw (uncorrected) EV charger current on this phase
 
 
 @dataclass

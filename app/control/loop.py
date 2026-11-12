@@ -131,7 +131,7 @@ class ControlLoop:
             await self._apply_ev_output(setpoint, suppress_ev_writes)
             self._state.commanded_setpoint_w = setpoint
 
-            # Breaker headroom diagnostics (from 30 s mean import power vs 80 % limit)
+            # Breaker headroom diagnostics (from 30 s mean import current vs 80 % limit)
             self._state.l1_breaker_headroom_pct = phase_headroom_pct(self, 1)
             self._state.l2_breaker_headroom_pct = phase_headroom_pct(self, 2)
             self._state.l3_breaker_headroom_pct = phase_headroom_pct(self, 3)

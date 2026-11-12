@@ -20,10 +20,6 @@ class AppState:
     victron_l1_current_a: float | None = None
     victron_l2_current_a: float | None = None
     victron_l3_current_a: float | None = None
-    # Signed per-phase grid power (+ = import, - = export), from Victron system regs 820-822
-    victron_l1_power_w: float | None = None
-    victron_l2_power_w: float | None = None
-    victron_l3_power_w: float | None = None
 
     # EV charger readings
     ev_connected: bool = False

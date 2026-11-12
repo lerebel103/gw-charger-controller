@@ -11,7 +11,7 @@ An intelligent EV charging controller that bridges a **GoodWe GW22K-HCA-20** cha
 - Reads real-time solar, battery, and grid data from the Victron GX over Modbus TCP
 - Reads charger status and per-phase current/voltage from the GW22K over Modbus TCP
 - Computes an optimal charge setpoint every few seconds based on the active charge mode
-- Applies closed-loop, import-power based breaker protection to prevent main breaker overload
+- Applies closed-loop, signed import-current based breaker protection to prevent main breaker overload
 - Exposes all sensors, controls, and configuration to Home Assistant via MQTT discovery
 
 ## Charge Modes
@@ -33,7 +33,7 @@ An optional feature (toggle "Eco Day Min Charge" switch in HA) that ensures the 
 
 ## Breaker Protection
 
-An always-on safety mechanism that keeps the 30 s mean grid **import** power on every phase below 80% of the configured breaker rating (32 A default). Per-phase power is signed, so export never counts as load; the cap is anchored to the measured EV power (the charger setpoint is a total over three phases). A raw reading above 90% drops to the minimum charge power immediately, and missing or implausible grid data fails safe to the minimum in every mode. See [docs/grid-power-scaling.md](docs/grid-power-scaling.md) for the full algorithm.
+An always-on safety mechanism that keeps the 30 s mean grid **import current** on every phase below 80% of the configured breaker rating (32 A default, so 25.6 A). The Victron reports signed per-phase current (import positive, export negative), so export never counts as load. Current, not power, is used because a low power factor draws more current than the real power suggests. The cap is anchored to the measured EV current (the charger setpoint is a total over three phases). A raw reading above 90% drops to the minimum charge power immediately, and missing grid data fails safe to the minimum in every mode. See [docs/grid-power-scaling.md](docs/grid-power-scaling.md) for the full algorithm; `scripts/victron_probe.py` is a read-only tool to check the Victron registers.
 
 ## Quick Start
 

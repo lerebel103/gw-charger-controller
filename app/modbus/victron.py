@@ -97,7 +97,6 @@ class VictronModbusClient:
             self._state.victron_l1_current_a = None
             self._state.victron_l2_current_a = None
             self._state.victron_l3_current_a = None
-            self._clear_phase_power()
             return
         try:
             await self._read_registers()
@@ -108,15 +107,8 @@ class VictronModbusClient:
             self._state.victron_l1_current_a = None
             self._state.victron_l2_current_a = None
             self._state.victron_l3_current_a = None
-            self._clear_phase_power()
             _throttle.warning("victron_read_fail", "Victron GX read failed: %s", exc)
             await self._close()
-
-    def _clear_phase_power(self) -> None:
-        """Clear per-phase signed grid power so stale values are never used for safety."""
-        self._state.victron_l1_power_w = None
-        self._state.victron_l2_power_w = None
-        self._state.victron_l3_power_w = None
 
     async def reconnect(self) -> None:
         """Force a reconnect (e.g. after IP/port change via MQTT)."""
@@ -164,10 +156,6 @@ class VictronModbusClient:
         battery_soc = batt_resp.registers[1]
 
         self._state.grid_power_w = float(grid_l1 + grid_l2 + grid_l3)
-        # Per-phase signed power (+ import, - export) is the breaker-protection signal
-        self._state.victron_l1_power_w = float(grid_l1)
-        self._state.victron_l2_power_w = float(grid_l2)
-        self._state.victron_l3_power_w = float(grid_l3)
         self._state.solar_battery_power_w = float(battery_power)
         self._state.solar_battery_soc_pct = float(battery_soc)
 
@@ -181,35 +169,34 @@ class VictronModbusClient:
             self._state.victron_l1_current_a = None
             self._state.victron_l2_current_a = None
             self._state.victron_l3_current_a = None
-            self._clear_phase_power()
             raise ModbusException(f"Grid voltage/current block read error: {vc_resp}")
 
         if len(vc_resp.registers) < 6:
             self._state.victron_l1_current_a = None
             self._state.victron_l2_current_a = None
             self._state.victron_l3_current_a = None
-            self._clear_phase_power()
             raise ModbusException(
                 f"Grid voltage/current block read incomplete: expected 6 registers, got {len(vc_resp.registers)}"
             )
 
-        # Even offsets = voltages (uint16, ÷10), odd offsets = currents (÷10). The meter reports
-        # currents as unsigned magnitudes (positive for import AND export); direction comes from power.
+        # Even offsets = voltages (uint16, ÷10), odd offsets = currents (int16, ÷10). The Victron proxies
+        # SIGNED per-phase current from the grid meter (+ import, - export), verified live against the EM540.
+        # (The EM540 itself and its Home Assistant export report unsigned magnitudes.)
         self._state.victron_l1_voltage_v = vc_resp.registers[0] / 10.0
         self._state.victron_l2_voltage_v = vc_resp.registers[2] / 10.0
         self._state.victron_l3_voltage_v = vc_resp.registers[4] / 10.0
 
-        # Decode currents with plausibility check (FR-15); abs() kept for safety against odd wraps
-        plausibility_limit = 2.0 * self._state.grid_breaker_limit_a
+        # Gross-sanity check (FR-15): |I| above twice the breaker rating is a bad decode and counts as missing
+        sanity_limit = 2.0 * self._state.grid_breaker_limit_a
         raw_currents = (
             _uint16_to_int16(vc_resp.registers[1]) / 10.0,
             _uint16_to_int16(vc_resp.registers[3]) / 10.0,
             _uint16_to_int16(vc_resp.registers[5]) / 10.0,
         )
 
-        self._state.victron_l1_current_a = raw_currents[0] if abs(raw_currents[0]) <= plausibility_limit else None
-        self._state.victron_l2_current_a = raw_currents[1] if abs(raw_currents[1]) <= plausibility_limit else None
-        self._state.victron_l3_current_a = raw_currents[2] if abs(raw_currents[2]) <= plausibility_limit else None
+        self._state.victron_l1_current_a = raw_currents[0] if abs(raw_currents[0]) <= sanity_limit else None
+        self._state.victron_l2_current_a = raw_currents[1] if abs(raw_currents[1]) <= sanity_limit else None
+        self._state.victron_l3_current_a = raw_currents[2] if abs(raw_currents[2]) <= sanity_limit else None
 
         if logger.isEnabledFor(logging.DEBUG):
             l1 = f"{self._state.victron_l1_current_a:.1f}" if self._state.victron_l1_current_a is not None else "N/A"

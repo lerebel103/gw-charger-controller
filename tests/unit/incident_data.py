@@ -6,6 +6,7 @@ Stdlib only (pandas is not a project dependency).
 from __future__ import annotations
 
 import csv
+import math
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -55,3 +56,12 @@ def resample_cycles(
         cycles.append({"t": t.timestamp(), **last})
         t = datetime.fromtimestamp(t.timestamp() + step_s, tz=UTC)
     return cycles
+
+
+def signed_current(current_a: float, power_w: float) -> float:
+    """Reconstruct the Victron's SIGNED grid current from the EM540's unsigned current and signed power.
+
+    The Home Assistant EM540 export reports unsigned current magnitudes, while the Victron proxies signed
+    per-phase current (+ import, - export). The sign is taken from the real power of the same phase.
+    """
+    return math.copysign(current_a, power_w)
