@@ -137,6 +137,10 @@ class TestVictronModbusClient:
         assert state.victron_l1_current_a == 5.0
         assert state.victron_l2_current_a == 3.0
         assert state.victron_l3_current_a == -2.0
+        # Per-phase signed power is stored alongside the summed grid_power_w
+        assert state.victron_l1_power_w == 500.0
+        assert state.victron_l2_power_w == 300.0
+        assert state.victron_l3_power_w == -100.0
 
     @pytest.mark.asyncio
     async def test_read_registers_grid_error_raises(self):
@@ -240,6 +244,10 @@ class TestVictronModbusClient:
         assert state.victron_l1_current_a is None
         assert state.victron_l2_current_a is None
         assert state.victron_l3_current_a is None
+        # Per-phase power is cleared too (it was set before the block read failed)
+        assert state.victron_l1_power_w is None
+        assert state.victron_l2_power_w is None
+        assert state.victron_l3_power_w is None
 
     @pytest.mark.asyncio
     async def test_read_clears_currents_when_disconnected(self):
@@ -251,11 +259,34 @@ class TestVictronModbusClient:
         vc = VictronModbusClient(state)
         vc._client = None  # not connected
 
+        state.victron_l1_power_w = 100.0
+        state.victron_l2_power_w = 100.0
+        state.victron_l3_power_w = 100.0
         await vc.read()
 
         assert state.victron_l1_current_a is None
         assert state.victron_l2_current_a is None
         assert state.victron_l3_current_a is None
+        assert state.victron_l1_power_w is None
+        assert state.victron_l2_power_w is None
+        assert state.victron_l3_power_w is None
+
+    @pytest.mark.asyncio
+    async def test_read_exception_clears_phase_power(self):
+        """A failed first grid read must not leave stale per-phase power behind."""
+        from pymodbus.exceptions import ModbusException
+
+        state = self._make_state()
+        state.victron_l1_power_w = 100.0
+        state.victron_l2_power_w = 100.0
+        state.victron_l3_power_w = 100.0
+        vc = VictronModbusClient(state)
+        vc._client = MagicMock(connected=True)
+        vc._read_registers = AsyncMock(side_effect=ModbusException("boom"))
+        vc._close = AsyncMock()
+        await vc.read()
+        assert state.victron_l1_power_w is None
+        assert state.victron_l3_power_w is None
 
     # --- reconnect ---
 

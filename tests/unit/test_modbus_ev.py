@@ -139,6 +139,10 @@ class TestEVChargerModbusClient:
         assert state.ev_current_a == pytest.approx(16.0 * 1.056)
         assert state.ev_current_b == pytest.approx(15.5 * 1.056)
         assert state.ev_current_c == pytest.approx(15.8 * 1.056)
+        # Raw currents bypass correction_pct (breaker protection needs the charger-reported value)
+        assert state.ev_current_raw_a == pytest.approx(16.0)
+        assert state.ev_current_raw_b == pytest.approx(15.5)
+        assert state.ev_current_raw_c == pytest.approx(15.8)
         assert state.ev_active_power_w == pytest.approx(11000.0 * 1.056)
         assert state.ev_session_energy_wh == 5000.0
         assert state.ev_charger_status == 3

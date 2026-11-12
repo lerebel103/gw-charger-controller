@@ -135,6 +135,7 @@ class EVChargerModbusClient:
         """Read all registers and update AppState."""
         if not self.connected:
             self._state.ev_comm_healthy = False
+            self._clear_raw_currents()
             return
         try:
             await self._read_registers()
@@ -147,6 +148,7 @@ class EVChargerModbusClient:
             self._consecutive_read_failures += 1
             self._state.ev_comm_healthy = False
             self._state.ev_last_read_error_at = _t.monotonic()
+            self._clear_raw_currents()
             _throttle.warning("ev_read_fail", "EV charger read failed: %s", exc)
             if self._consecutive_read_failures >= _MAX_CONSECUTIVE_READ_FAILURES:
                 await self._close()
@@ -408,6 +410,12 @@ class EVChargerModbusClient:
         self._state.ev_comm_healthy = False
         self._serial_read_attempted = False
 
+    def _clear_raw_currents(self) -> None:
+        """Clear raw phase currents so stale readings are never used for breaker protection."""
+        self._state.ev_current_raw_a = None
+        self._state.ev_current_raw_b = None
+        self._state.ev_current_raw_c = None
+
     async def disconnect(self) -> None:
         """Close the current Modbus connection.
 
@@ -433,6 +441,9 @@ class EVChargerModbusClient:
         self._state.ev_voltage_l1_v = regs[0] / 10.0
         self._state.ev_voltage_l2_v = regs[1] / 10.0
         self._state.ev_voltage_l3_v = regs[2] / 10.0
+        self._state.ev_current_raw_a = regs[3] / 10.0
+        self._state.ev_current_raw_b = regs[4] / 10.0
+        self._state.ev_current_raw_c = regs[5] / 10.0
         self._state.ev_current_a = (regs[3] / 10.0) * correction_factor
         self._state.ev_current_b = (regs[4] / 10.0) * correction_factor
         self._state.ev_current_c = (regs[5] / 10.0) * correction_factor

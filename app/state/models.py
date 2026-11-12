@@ -20,6 +20,10 @@ class AppState:
     victron_l1_current_a: float | None = None
     victron_l2_current_a: float | None = None
     victron_l3_current_a: float | None = None
+    # Signed per-phase grid power (+ = import, - = export), from Victron system regs 820-822
+    victron_l1_power_w: float | None = None
+    victron_l2_power_w: float | None = None
+    victron_l3_power_w: float | None = None
 
     # EV charger readings
     ev_connected: bool = False
@@ -45,6 +49,10 @@ class AppState:
     ev_current_a: float | None = None
     ev_current_b: float | None = None
     ev_current_c: float | None = None
+    # Charger-reported phase currents WITHOUT correction_pct (used by breaker protection)
+    ev_current_raw_a: float | None = None
+    ev_current_raw_b: float | None = None
+    ev_current_raw_c: float | None = None
     ev_completion_time_h: int | None = None
     ev_total_energy_wh: float | None = None
     ev_plug_and_charge: bool = False
