@@ -3,6 +3,8 @@
 ## Git Policy
 
 - **Never commit or push code without explicit user permission.** Always wait for the user to approve before running `git commit`, `git push`, or creating tags/PRs.
+- **Never commit directly on `main`.** All changes must be made on a separate feature branch (e.g. `fix/<topic>` or `feature/<topic>`), ideally in a git worktree under `.worktrees/`, and land on `main` only via a reviewed pull request.
+- **Never push to `main`, force-push, or merge into `main` yourself.** Push only the feature branch and open a PR; the user merges.
 
 ## Project Architecture
 
