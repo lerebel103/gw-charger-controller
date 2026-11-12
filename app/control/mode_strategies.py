@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from app.control.breaker import measured_ev_phase_powers_w
 from app.control.constants import (
     _ECO_DAY_COOLDOWN_S,
+    _ECO_DAY_FOLLOW_ALLOWANCE_W,
     _EV_MAX_SOC_MARGIN_PCT,
     _MAX_CHARGE_W,
     _MIN_CHARGE_W,
@@ -253,11 +254,14 @@ class EcoDayModeHandler(ModeSetpointHandler):
         else:
             loop._eco_day_setpoint_w += state.eco_day_ramp_step_w
             # "EV is following" guard: the setpoint is a TOTAL hint over 3 phases. Never wind it
-            # more than one ramp step above what the car actually draws (3 x busiest phase), e.g.
-            # a single-phase car only ever realises ~1/3 of the setpoint.
-            follow = measured_ev_phase_powers_w(state)
+            # more than a tracking allowance above what the car actually draws (3 x busiest phase), e.g.
+            # a single-phase car only ever realises ~1/3 of the setpoint. Uses the calibrated current
+            # (like the written setpoint) and an allowance of at least _ECO_DAY_FOLLOW_ALLOWANCE_W so
+            # quantisation in write_setpoint() and small under-reporting cannot stall the ramp.
+            follow = measured_ev_phase_powers_w(state, calibrated=True)
             if follow is not None:
-                follow_limit = max(_MIN_CHARGE_W, 3.0 * max(follow) + state.eco_day_ramp_step_w)
+                allowance = max(state.eco_day_ramp_step_w, _ECO_DAY_FOLLOW_ALLOWANCE_W)
+                follow_limit = max(_MIN_CHARGE_W, 3.0 * max(follow) + allowance)
                 loop._eco_day_setpoint_w = min(loop._eco_day_setpoint_w, follow_limit)
 
         loop._eco_day_setpoint_w = clamp(loop._eco_day_setpoint_w, _MIN_CHARGE_W, _MAX_CHARGE_W)

@@ -10,6 +10,9 @@ _GRID_EXPORT_START_THRESHOLD_W = -1400.0  # mean grid_power_w <= this -> start c
 _ECO_DAY_RAMP_STEP_W = 200.0  # ramp step per control loop iteration
 _BATTERY_POWER_DEADBAND_W = 200.0  # ignore battery power within this range of zero
 _ECO_DAY_COOLDOWN_S = 300.0  # 5 min cooldown after eco day charging stops before restarting
+# Eco-day "EV is following" guard: the ramp may exceed 3 x the busiest calibrated EV phase power by
+# max(ramp step, this). Covers write_setpoint() rounding and the car realising slightly less than commanded.
+_ECO_DAY_FOLLOW_ALLOWANCE_W = 500.0
 _RAMP_DEADBAND_W = 200.0  # ignore battery power within +/-200 W
 
 _EV_MAX_SOC_DEFAULT = 80.0  # reset value on disconnect

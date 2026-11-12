@@ -6,7 +6,7 @@ import pytest
 
 from app.control import breaker
 from app.control.breaker import limit_phase_current, record_phase_samples
-from app.control.constants import _ECO_DAY_RAMP_STEP_W, _MAX_CHARGE_W, _MIN_CHARGE_W
+from app.control.constants import _ECO_DAY_FOLLOW_ALLOWANCE_W, _ECO_DAY_RAMP_STEP_W, _MAX_CHARGE_W, _MIN_CHARGE_W
 from app.control.mode_strategies import clamp_eco_day_to_applied, setpoint_eco_day
 from app.log_throttle import LogThrottle
 from app.state import ChargeModeState
@@ -85,15 +85,47 @@ class TestEcoDayAntiWindup:
         assert requested == _MAX_CHARGE_W
 
     def test_ev_not_following_does_not_wind_up_to_max(self):
-        """Car limited to 3 kW on its phase: setpoint stays within one step of 3 x measured."""
+        """Car limited to 3 kW on its phase: setpoint stays within the allowance of 3 x calibrated measured."""
         cl, state = _eco_loop()
+        limit = 3 * 3000.0 * (1 + state.correction_pct / 100.0) + _ECO_DAY_FOLLOW_ALLOWANCE_W
         requested = _MIN_CHARGE_W
         for _ in range(150):
             p_ev = min(requested / 3.0, 3000.0)
             set_inputs(state, (500.0, -500.0, -500.0), ev_w=(p_ev, 0.0, 0.0))
             requested = setpoint_eco_day(cl)
-            assert requested <= max(_MIN_CHARGE_W, 3 * 3000.0 + _ECO_DAY_RAMP_STEP_W)
-        assert requested < 10000.0
+            assert requested <= max(_MIN_CHARGE_W, limit) + 1e-6
+        assert requested < 11000.0
+
+    def test_tiny_ramp_step_still_advances_when_ev_follows(self):
+        """10 W step, 4400 W command, 6.3 A at 233 V: the old one-step allowance rounded back to 4400 W."""
+        cl, state = _eco_loop(eco_day_ramp_step_w=10.0)
+        cl._eco_day_setpoint_w = 4400.0
+        set_inputs(state, (500.0, 500.0, 500.0))
+        state.ev_current_raw_a = state.ev_current_raw_b = state.ev_current_raw_c = 6.0
+        state.ev_current_a = state.ev_current_b = state.ev_current_c = 6.3
+        assert setpoint_eco_day(cl) == 4410.0
+        assert setpoint_eco_day(cl) == 4420.0
+
+    def test_raw_under_reporting_does_not_stall_default_ramp(self):
+        """Raw current ~5.6 % below the commanded power: guard uses calibrated current and still advances."""
+        cl, state = _eco_loop()
+        requested = _MIN_CHARGE_W
+        for _ in range(20):
+            per_phase_cmd = requested / 3.0
+            # charger delivers exactly the command, but the raw register under-reports by 5.6 %
+            set_inputs(state, (500.0, 500.0, 500.0), ev_w=(per_phase_cmd / 1.056,) * 3)
+            nxt = setpoint_eco_day(cl)
+            assert nxt > requested
+            requested = nxt
+
+    def test_guard_prevents_windup_when_ev_draws_a_third_of_command(self):
+        """Incident pattern: command far above what the car draws -> setpoint pinned near 3 x draw + allowance."""
+        cl, state = _eco_loop()
+        cl._eco_day_setpoint_w = 12000.0
+        set_inputs(state, (500.0, 500.0, 500.0), ev_w=(1300.0, 0.0, 0.0))
+        for _ in range(10):
+            requested = setpoint_eco_day(cl)
+            assert requested == pytest.approx(3 * 1300.0 * 1.056 + _ECO_DAY_FOLLOW_ALLOWANCE_W)
 
     def test_minimum_preserved_when_ev_barely_draws(self):
         cl, state = _eco_loop()

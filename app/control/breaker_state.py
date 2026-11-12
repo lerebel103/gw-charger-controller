@@ -21,6 +21,7 @@ class BreakerLimiterState:
     stopped: bool = False  # stop latch: charger held at 0 until the grid has recovered
     missing_cycles: int = 0
     last_applied_w: float | None = None  # last output applied on a valid cycle; held during the data debounce
+    hold_ceiling_w: float | None = None  # tightest output since data became invalid; the hold never exceeds it
     min_overload_cycles: int = 0
     last_binding_phase: int | None = None
     restart_at_minimum: bool = False  # stop latch released: next charge start is held at the minimum

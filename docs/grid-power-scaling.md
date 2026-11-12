@@ -49,13 +49,19 @@ Export never creates headroom and never offsets import on another phase.
 1. **Standby**: reset limiter state and return the setpoint untouched. No Modbus activity is added.
 2. **Fail-safe** (all modes, including Manual and Eco-night): if grid power, grid current or the raw EV
    current is missing, stale or implausible on any phase, count the cycle. For the first two consecutive
-   cycles (the debounce window) the limiter **holds**: the output is `min(setpoint, last applied output)`,
-   where the last applied output is the last value returned on a valid cycle (the minimum charge power if
-   there is none, e.g. the session just started). The output can stay the same or go down but never ramps
-   up on bad data; an active cap is still honoured. From the **3rd** consecutive cycle (about 20 s at a
+   cycles (the debounce window) the limiter **holds**: the output is `min(setpoint, hold ceiling)`. The ceiling
+   starts at the last value returned on a valid cycle (the minimum charge power if there is none, e.g. the
+   session just started) and is **monotonically tightened** to every output returned while data stays invalid,
+   including 0. A request of 5000 W after a valid 6000 W is held at 5000 W, and a following 11000 W request
+   still returns 5000 W. The ceiling resets when valid data returns. The output never ramps up on bad data;
+   an active cap is still honoured. From the **3rd** consecutive cycle (about 20 s at a
    10 s loop interval) return the minimum charge power (4400 W) with a throttled WARNING. A stopped latch
    stays at 0 while data is missing. On valid data normal behaviour resumes, and an active cap keeps its
    gradual release (see release).
+   **Partial data**: a missing phase does not disable protection on the others. Overload protection (trim,
+   fast trip, stop counter) is still evaluated on every usable phase and the result is the stricter of that
+   and the hold / minimum fallback. A cap is never released on partial data. For example, with L3 missing an
+   overloaded EV-active L1 above 90 % raw trips to the minimum and is stopped after 3 cycles.
    *Plausibility*: `|P_grid| > 1.05 x V x I_grid + 50 W` marks the phase data implausible; it counts as missing.
 3. **Stop latch release** (evaluated before the zero-setpoint early return, so it can release while the
    setpoint is 0): release only when on every phase a restart at the minimum fits with margin:
@@ -76,8 +82,10 @@ Export never creates headroom and never offsets import on another phase.
    phases the lowest cap wins (binding phase). The cap ratchets down only (`cap_w = min(cap_w, new)`), the
    output is `min(setpoint, max(cap, 4400 W))`. Using the same window for import and EV power avoids a lagging
    grid mean cutting after the EV has already dropped.
-7. **Overloaded at the minimum** for 3 consecutive cycles (fast trip, or a cap at or below 4400 W) sets the stop
-   latch: setpoint 0 via the existing stop path.
+7. **Overloaded at the minimum** for 3 consecutive cycles sets the stop latch: setpoint 0 via the existing stop
+   path. The counter uses the **effective output**: a cycle counts when a phase is over limit (trim or fast trip)
+   and the output is at or below 4400 W, even if the calculated cap is higher (e.g. an EV not following the
+   minimum command). It resets when no phase is over limit.
 8. **Release**: while no phase is over limit and the EV is active, the cap is held until every EV-active phase
    has `mean_import < P_lim - 2 A x V`. Then it rises by `_BREAKER_CAP_RELEASE_STEP_W` (200 W) per cycle until it
    reaches the requested setpoint and is cleared. Inside the dead band (between `P_lim - 2 A x V` and `P_lim`) the cap is held.
@@ -104,9 +112,12 @@ The Eco-day ramp adds 200 W per cycle when the home battery allows. Two guards s
 - `clamp_eco_day_to_applied`: after limiting, if the applied setpoint is below the request while ramping, the
   internal ramp setpoint is pulled down to the applied value (never below 4400 W). A limiter stop therefore
   restarts the ramp from the minimum.
-- "EV is following": the ramp-up never exceeds `3 x max_n P_ev[n] + eco_day_ramp_step_w` (minimum 4400 W), so a
-  car that realises less than the setpoint cannot wind the ramp up to 22 kW. The guard is skipped when the raw
-  EV currents are unknown. Eco start/stop hysteresis (grid/battery gates, cooldown) is unchanged.
+- "EV is following": the ramp-up never exceeds `3 x max_n P_ev[n] + allowance` (minimum 4400 W), where
+  `allowance = max(eco_day_ramp_step_w, _ECO_DAY_FOLLOW_ALLOWANCE_W = 500 W)`, so a car that realises less than
+  the setpoint cannot wind the ramp up to 22 kW. This guard (and only this one) uses the **calibrated**
+  (`correction_pct`-applied) EV current, matching the written setpoint, and the 500 W floor covers
+  `write_setpoint()` rounding and small under-reporting, so a following EV can always advance the ramp. Breaker
+  protection keeps the raw current. The guard is skipped when the EV currents are unknown. Eco start/stop hysteresis (grid/battery gates, cooldown) is unchanged.
 
 ## 6. Data model and Modbus
 
@@ -119,7 +130,8 @@ Standby behaviour in AGENTS.md is untouched: the limiter performs no Modbus I/O.
 ## 7. Home Assistant entities
 
 `l{1,2,3}_breaker_headroom_pct` is now `(P_lim - mean_import) / P_lim x 100` (capped at 100, 100 while
-exporting). Entities and the breaker limit control are unchanged.
+exporting). It is `None` for a phase whose current grid power/current is missing or implausible, instead of
+the old buffered value. In Standby, grid-only headroom stays valid (no EV data needed). Entities and the breaker limit control are unchanged.
 
 ## 8. Logging
 
@@ -149,6 +161,10 @@ Synthetic single-phase trim: base load 3.0 kW on L1, car follows `setpoint / 3`.
 - Phase data implausible or missing: hold at the last applied output for 2 cycles, then the minimum from
   the 3rd (about 20 s at a 10 s loop), in every mode (behaviour change: Manual and Eco-night used to pass
   the setpoint through unlimited).
+- Standby / EV reads skipped: grid samples keep being recorded for headroom diagnostics, but without EV data
+  and never marked fresh for the limiter. The sample history is cleared when EV reads stop and when they
+  resume, so retained (stale) EV currents never pair with fresh grid readings after leaving Standby. No EV
+  Modbus polling is added.
 - First cycles with no history: not treated as missing; the limit uses the samples available.
 - Limiter stop while the session state machine still believes it is charging: same as before (stop is applied
   after the state machine); not redesigned here.
@@ -164,10 +180,15 @@ Synthetic single-phase trim: base load 3.0 kW on L1, car follows `setpoint / 3`.
 | Single-phase trim, x3 mapping, hysteresis, gradual release | `TestSinglePhaseTrimAndRelease` |
 | Fast trip, stop latch, restart | `TestFastTripAndStop` |
 | Export-only, non-EV phase, three-phase car | `TestExportAndPhases` |
+| Partial data keeps protecting healthy phases (fast trip + stop, trim, no release) | `TestPartialDataProtection` |
+| Stop counter on effective output (EV ignores the minimum) | `TestStopCounterUsesEffectiveOutput` |
+| Headroom `None` on invalid inputs; grid-only headroom in Standby | `TestHeadroomInvalidInputs` |
+| Monotonic hold ceiling (6000 W -> 5000 W, 11000 W -> 5000 W), reset on valid data, zero | `TestMonotonicHold` |
+| Standby stale EV samples do not cap after exit | `TestStandbySampleInvalidation` |
 | Missing / implausible data: hold for 2 cycles (higher request held, lower passes, no prior value gives minimum), minimum on the 3rd, resume on valid data; pinned Manual, Eco-day and Eco-night | `TestFailSafe` |
 | Current guard (PF < 1) | `TestCurrentGuard` |
 | Edges, run_loop integration | `TestEdges`, `TestRunLoopIntegration` |
-| Eco anti-windup | `test_breaker_eco_antiwindup.py` |
+| Eco anti-windup, follow-guard allowance (10 W step, raw under-reporting, 1/3 draw) | `test_breaker_eco_antiwindup.py` |
 | Modbus plumbing | `test_modbus_victron.py`, `test_modbus_ev.py` |
 
 All in `tests/unit/test_breaker_protection.py` unless a file is named. Fixtures:

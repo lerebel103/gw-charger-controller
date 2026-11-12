@@ -544,3 +544,144 @@ class TestRunLoopIntegration:
         assert state.l1_breaker_headroom_pct is not None
         assert state.l1_breaker_headroom_pct < 0  # raw import above the 80 % limit
         assert state.l2_breaker_headroom_pct == 100.0
+
+
+# ---------------------------------------------------------------------------
+# PR #25 review follow-ups
+# ---------------------------------------------------------------------------
+class TestPartialDataProtection:
+    """A missing phase must not disable overload protection on the healthy phases."""
+
+    def test_missing_l3_with_l1_over_fast_threshold_trips_then_stops(self):
+        loop, state = _loop()
+        t = _warmup(loop, state)
+        set_inputs(state, (7000.0, -1000.0, None), ev_w=(2000.0, 0.0, 0.0))  # 7000 W > 90 % (6710 W)
+        out = []
+        for _ in range(_BREAKER_STOP_CYCLES):
+            out.append(run_cycle(loop, 11000.0, t))
+            t += CYCLE_S
+        assert out == [_MIN_CHARGE_W] * (_BREAKER_STOP_CYCLES - 1) + [0.0]
+        assert loop._breaker.stopped
+        assert run_cycle(loop, 11000.0, t) == 0.0  # stays stopped while data is still missing
+
+    def test_missing_l3_with_l1_over_mean_threshold_trims(self):
+        loop, state = _loop()
+        loop._breaker.last_applied_w = 11000.0
+        set_inputs(state, (6200.0, -1000.0, None), ev_w=(3000.0, 0.0, 0.0))  # over 80 % (5965 W), under 90 %
+        out = run_cycle(loop, 11000.0, 0.0)
+        excess = 6200.0 - P_LIM
+        assert out == pytest.approx(3.0 * (3000.0 - excess))
+        assert out < 11000.0
+
+    def test_partial_data_never_releases_a_cap(self):
+        loop, state = _loop()
+        loop._breaker.last_applied_w = 11000.0
+        loop._breaker.cap_w = 6000.0
+        set_inputs(state, (500.0, -1000.0, None), ev_w=(1467.0, 0.0, 0.0))
+        assert run_cycle(loop, 11000.0, 0.0) == 6000.0
+        assert loop._breaker.cap_w == 6000.0
+
+
+class TestStopCounterUsesEffectiveOutput:
+    def test_ev_ignoring_minimum_below_fast_trip_still_latches_stop(self):
+        """Phase stays over 80 % mean but under 90 % raw while the output sits at the minimum."""
+        loop, state = _loop()
+        set_inputs(state, (6300.0, -1000.0, -1000.0), ev_w=(3000.0, 0.0, 0.0))
+        out = []
+        for k in range(_BREAKER_STOP_CYCLES):
+            out.append(run_cycle(loop, _MIN_CHARGE_W, k * CYCLE_S))
+        # Calculated cap (~8 kW) exceeds the minimum, yet the effective output is the minimum.
+        assert out == [_MIN_CHARGE_W] * (_BREAKER_STOP_CYCLES - 1) + [0.0]
+        assert loop._breaker.stopped
+
+
+class TestHeadroomInvalidInputs:
+    def test_failed_read_publishes_none_for_that_phase_only(self):
+        loop, state = _loop()
+        set_inputs(state, (3000.0, -500.0, -500.0))
+        record_phase_samples(loop, now=0.0)
+        assert phase_headroom_pct(loop, 1, now=1.0) is not None
+        set_inputs(state, (None, -500.0, -500.0))
+        assert phase_headroom_pct(loop, 1, now=1.0) is None
+        assert phase_headroom_pct(loop, 2, now=1.0) == 100.0
+
+    def test_implausible_read_publishes_none(self):
+        loop, state = _loop()
+        set_inputs(state, (3000.0, -500.0, -500.0))
+        record_phase_samples(loop, now=0.0)
+        set_inputs(state, (5000.0, -500.0, -500.0), i=(1.0, 2.0, 2.0))
+        assert phase_headroom_pct(loop, 1, now=1.0) is None
+
+    def test_standby_keeps_grid_only_headroom_without_ev_data(self):
+        loop, state = _loop(charge_mode="Standby")
+        set_inputs(state, (P_LIM / 2, -500.0, -500.0))
+        state.ev_current_raw_a = state.ev_current_raw_b = state.ev_current_raw_c = None
+        record_phase_samples(loop, now=0.0, ev_fresh=False)
+        assert limit_phase_current(loop, 0.0, now=0.0) == 0.0  # limiter resets its state in Standby
+        assert phase_headroom_pct(loop, 1, now=0.0) == pytest.approx(50.0)
+
+
+class TestMonotonicHold:
+    def test_hold_ceiling_tightens_during_invalid_data(self):
+        loop, state = _loop()
+        t = _warmup(loop, state, setpoint=6000.0)
+        set_inputs(state, (None, -1000.0, -1000.0), ev_w=(1467.0, 0.0, 0.0))
+        assert run_cycle(loop, 5000.0, t) == 5000.0
+        assert run_cycle(loop, 11000.0, t + CYCLE_S) == 5000.0
+
+    def test_hold_ceiling_resets_when_data_returns(self):
+        loop, state = _loop()
+        t = _warmup(loop, state, setpoint=6000.0)
+        set_inputs(state, (None, -1000.0, -1000.0), ev_w=(1467.0, 0.0, 0.0))
+        run_cycle(loop, 5000.0, t)
+        set_inputs(state, (1500.0, -1000.0, -1000.0), ev_w=(1467.0, 0.0, 0.0))
+        assert run_cycle(loop, 11000.0, t + CYCLE_S) == 11000.0
+        assert loop._breaker.hold_ceiling_w is None
+
+    def test_zero_output_tightens_the_ceiling_to_zero(self):
+        loop, state = _loop()
+        t = _warmup(loop, state, setpoint=6000.0)
+        set_inputs(state, (None, -1000.0, -1000.0), ev_w=(1467.0, 0.0, 0.0))
+        assert run_cycle(loop, 0.0, t) == 0.0
+        assert run_cycle(loop, 11000.0, t + CYCLE_S) == 0.0
+
+
+class TestStandbySampleInvalidation:
+    @pytest.mark.asyncio
+    async def test_stale_ev_samples_from_standby_do_not_cap_after_exit(self):
+        import asyncio
+        import unittest.mock
+        from unittest.mock import AsyncMock, MagicMock
+
+        from app.control.loop import ControlLoop
+        from app.state import ChargerStatus
+
+        state = make_state(ev_connected=True, ev_comm_healthy=True, manual_power_w=11000.0, charge_mode="Standby")
+        state.ev_charger_status_enum = ChargerStatus.CHARGING_IN_PROGRESS
+        # Stale EV currents (reads are skipped in Standby) paired with heavy grid import.
+        set_inputs(state, (9000.0, -1000.0, -1000.0), ev_w=(2000.0, 0.0, 0.0))
+        victron = MagicMock()
+        victron.connected = True
+        victron.ensure_connected = AsyncMock()
+        victron.read = AsyncMock()
+        ev = AsyncMock()
+        ev.connected = True
+        cl = ControlLoop(state, victron, ev, asyncio.Queue())
+        cl._standby_write_quiet = True
+        ticks = {"n": 0}
+
+        async def _sleep(*a, **kw):
+            ticks["n"] += 1
+            if ticks["n"] == 3:
+                # Leave Standby with the grid back to benign.
+                state.charge_mode = "Manual"
+                set_inputs(state, (1000.0, -1000.0, -1000.0), ev_w=(2000.0, 0.0, 0.0))
+            if ticks["n"] == 4:
+                raise asyncio.CancelledError
+
+        with pytest.raises(asyncio.CancelledError), unittest.mock.patch("asyncio.sleep", side_effect=_sleep):
+            await cl.run_loop()
+        assert state.commanded_setpoint_w == 11000.0
+        assert cl._breaker.cap_w is None
+        assert not cl._breaker.stopped
+        assert all(s.import_w == 1000.0 for s in cl._phase_samples[0])

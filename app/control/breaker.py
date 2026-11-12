@@ -85,30 +85,49 @@ def _ev_voltage(state: AppState, phase: int) -> float:
     return float(v) if _voltage_ok(v) else _grid_voltage(state, phase)
 
 
-def measured_ev_phase_powers_w(state: AppState) -> tuple[float, float, float] | None:
-    """Return measured EV power per phase (V_ev * raw I), or None if any raw current is missing."""
-    currents = [_ev_current_raw(state, n) for n in _PHASES]
+def measured_ev_phase_powers_w(state: AppState, calibrated: bool = False) -> tuple[float, float, float] | None:
+    """Return measured EV power per phase (V_ev * I), or None if any current is missing.
+
+    Breaker protection uses the RAW charger current. ``calibrated=True`` uses the correction_pct-applied
+    current instead (for the Eco follow guard only).
+    """
+    currents = [
+        getattr(state, f"ev_current_{_EV_SUFFIX[n - 1]}") if calibrated else _ev_current_raw(state, n) for n in _PHASES
+    ]
     if any(c is None for c in currents):
         return None
     p1, p2, p3 = (_ev_voltage(state, n) * float(currents[n - 1]) for n in _PHASES)  # type: ignore[arg-type]
     return (p1, p2, p3)
 
 
-def record_phase_samples(loop: SamplingLoopProtocol, now: float | None = None) -> None:
-    """Record one sample per phase (when inputs are present and plausible) and prune the window."""
+def _grid_inputs_plausible(state: AppState, phase: int) -> bool:
+    """True when this phase's grid power and current are present and mutually plausible."""
+    p, i = _grid_power(state, phase), _grid_current(state, phase)
+    if p is None or i is None:
+        return False
+    return abs(p) <= _BREAKER_PLAUSIBILITY_RATIO * _grid_voltage(state, phase) * i + _BREAKER_PLAUSIBILITY_TOLERANCE_W
+
+
+def record_phase_samples(loop: SamplingLoopProtocol, now: float | None = None, ev_fresh: bool = True) -> None:
+    """Record one sample per phase (when inputs are present and plausible) and prune the window.
+
+    With ``ev_fresh`` False (EV reads skipped, e.g. Standby) only the grid side is recorded: the EV power is
+    stored as 0 and no phase is marked fresh for the limiter, so retained EV currents never pair with new
+    grid readings. The caller drops these samples when EV reads resume.
+    """
     now = _time.monotonic() if now is None else now
     state = loop._state
     breaker = loop._breaker
     for n in _PHASES:
         p = _grid_power(state, n)
         i = _grid_current(state, n)
-        i_ev = _ev_current_raw(state, n)
+        i_ev = _ev_current_raw(state, n) if ev_fresh else 0.0
         breaker.phase_fresh[n - 1] = False
         if p is None or i is None or i_ev is None:
             continue
         v = _grid_voltage(state, n)
         key = f"breaker_implausible_{n}"
-        if abs(p) > _BREAKER_PLAUSIBILITY_RATIO * v * i + _BREAKER_PLAUSIBILITY_TOLERANCE_W:
+        if not _grid_inputs_plausible(state, n):
             _throttle.warning(
                 key,
                 "Breaker protection: L%d grid data implausible (P=%.0f W, I=%.1f A, V=%.0f V); treating as missing",
@@ -127,7 +146,7 @@ def record_phase_samples(loop: SamplingLoopProtocol, now: float | None = None) -
                 ev_w=_ev_voltage(state, n) * i_ev,
             )
         )
-        breaker.phase_fresh[n - 1] = True
+        breaker.phase_fresh[n - 1] = ev_fresh
     cutoff = now - _PHASE_IMPORT_MEAN_WINDOW_S
     loop._phase_samples = [[s for s in samples if s.t >= cutoff] for samples in loop._phase_samples]
 
@@ -151,7 +170,13 @@ def mean_phase_import_w(loop: SamplingLoopProtocol, phase: int, now: float | Non
 
 
 def phase_headroom_pct(loop: SamplingLoopProtocol, phase: int, now: float | None = None) -> float | None:
-    """Headroom to the 80 % import-power limit as a percentage (max 100), or None without samples."""
+    """Headroom to the 80 % import-power limit as a percentage (max 100).
+
+    None without samples or when the phase's current grid inputs are missing / implausible, so a failed read
+    does not keep publishing an old value from the rolling buffer.
+    """
+    if phase in _PHASES and not _grid_inputs_plausible(loop._state, phase):
+        return None
     mean_imp = mean_phase_import_w(loop, phase, now)
     if mean_imp is None:
         return None
@@ -205,66 +230,16 @@ def _clear_throttles() -> None:
         _throttle.reset(key)
 
 
-def limit_phase_current(loop: SamplingLoopProtocol, setpoint: float, now: float | None = None) -> float:
-    """Return the TOTAL setpoint after main-breaker protection (only ever reduces it)."""
-    now = _time.monotonic() if now is None else now
+def _protect(
+    loop: SamplingLoopProtocol, phases: list[_Phase], setpoint: float, *, partial: bool, now: float | None = None
+) -> float:
+    """Overload protection (trim, fast trip, stop counter, gradual release) over the given phases.
+
+    With ``partial`` (some phase has no usable data) protection still runs on the healthy phases, but the
+    cap is never released and ``last_applied_w`` is left untouched.
+    """
     state = loop._state
     b: BreakerLimiterState = loop._breaker
-
-    # Standby: no EV Modbus activity, limiter irrelevant.
-    if state.charge_mode == "Standby":
-        loop._breaker = BreakerLimiterState()
-        _clear_throttles()
-        return setpoint
-
-    # --- Fail-safe on missing / stale / implausible data ---------------------------------
-    if not all(b.phase_fresh) or any(not _window(loop, n, now) for n in _PHASES):
-        b.missing_cycles += 1
-        if b.stopped:
-            return 0.0
-        if setpoint <= 0:
-            return setpoint
-        if b.missing_cycles >= _BREAKER_MISSING_DATA_CYCLES:
-            b.cap_w = _MIN_CHARGE_W
-            _throttle.warning(
-                "breaker_failsafe",
-                "Breaker protection: grid/EV phase data missing for %d cycles; limiting to minimum %.0f W",
-                b.missing_cycles,
-                _MIN_CHARGE_W,
-            )
-            return _MIN_CHARGE_W
-        # Debounce window: hold. Never ramp above the last output applied on a valid cycle
-        # (the minimum if there is none); the setpoint may stay the same or go down.
-        held = _MIN_CHARGE_W if b.last_applied_w is None else b.last_applied_w
-        result = min(setpoint, held)
-        if b.cap_w is not None:
-            result = min(result, max(b.cap_w, _MIN_CHARGE_W))
-        return result
-    if b.missing_cycles:
-        b.missing_cycles = 0
-        _throttle.clear("breaker_failsafe")
-
-    phases = [_Phase(loop, n, now) for n in _PHASES]
-
-    # --- Stop latch (evaluated before the setpoint<=0 early return so it can release) ----
-    if b.stopped:
-        if not all(ph.can_restart_at_minimum() for ph in phases):
-            b.last_applied_w = None
-            return 0.0
-        b.stopped = False
-        b.cap_w = _MIN_CHARGE_W
-        b.restart_at_minimum = True
-        b.min_overload_cycles = 0
-        _throttle.clear("breaker_stop")
-        logger.info("Breaker protection: grid import recovered, releasing stop latch (restart capped at minimum)")
-
-    if setpoint <= 0:
-        b.last_applied_w = None
-        if not b.stopped:
-            if not b.restart_at_minimum:
-                b.cap_w = None
-            b.min_overload_cycles = 0
-        return setpoint
 
     # --- Overload on phases the EV does not load: cannot be relieved by throttling --------
     for ph in phases:
@@ -319,8 +294,9 @@ def limit_phase_current(loop: SamplingLoopProtocol, setpoint: float, now: float 
     if needed is not None:
         b.cap_w = needed if b.cap_w is None else min(b.cap_w, needed)
         result = min(setpoint, max(b.cap_w, _MIN_CHARGE_W))
-        # Overloaded even at the charger minimum -> count towards a stop.
-        b.min_overload_cycles = b.min_overload_cycles + 1 if needed <= _MIN_CHARGE_W else 0
+        # Still overloaded while the EFFECTIVE output is at the minimum -> count towards a stop. Counting the
+        # calculated cap instead would reset every cycle once the cap ratchets to the minimum.
+        b.min_overload_cycles = b.min_overload_cycles + 1 if result <= _MIN_CHARGE_W else 0
         if b.min_overload_cycles >= _BREAKER_STOP_CYCLES:
             b.stopped = True
             b.min_overload_cycles = 0
@@ -337,7 +313,8 @@ def limit_phase_current(loop: SamplingLoopProtocol, setpoint: float, now: float 
         if b.cap_w is not None:
             active = [ph for ph in phases if ph.ev_active]
             # Only release while the EV is actually drawing, so the margin is observed under load.
-            if active and all(ph.has_release_margin() for ph in active):
+            # Never release on partial data.
+            if not partial and active and all(ph.has_release_margin() for ph in active):
                 b.cap_w += _BREAKER_CAP_RELEASE_STEP_W
                 if b.cap_w >= setpoint:
                     b.cap_w = None
@@ -346,5 +323,89 @@ def limit_phase_current(loop: SamplingLoopProtocol, setpoint: float, now: float 
             if b.cap_w is not None:
                 result = min(setpoint, max(b.cap_w, _MIN_CHARGE_W))
 
-    b.last_applied_w = min(result, _MAX_CHARGE_W)
-    return b.last_applied_w
+    result = min(result, _MAX_CHARGE_W)
+    if not partial:
+        b.last_applied_w = result
+    return result
+
+
+def _limit_with_missing_data(loop: SamplingLoopProtocol, setpoint: float, now: float, usable: list[int]) -> float:
+    """Fail-safe when some phase has no usable data, still protecting the healthy phases.
+
+    The result is the stricter of the missing-data fallback (hold, then minimum) and overload protection
+    evaluated on the usable phases.
+    """
+    b: BreakerLimiterState = loop._breaker
+    b.missing_cycles += 1
+    if b.stopped:
+        return 0.0
+    if b.hold_ceiling_w is None:
+        b.hold_ceiling_w = _MIN_CHARGE_W if b.last_applied_w is None else b.last_applied_w
+    if setpoint <= 0:
+        b.hold_ceiling_w = 0.0
+        return setpoint
+    if b.missing_cycles >= _BREAKER_MISSING_DATA_CYCLES:
+        b.cap_w = _MIN_CHARGE_W
+        _throttle.warning(
+            "breaker_failsafe",
+            "Breaker protection: grid/EV phase data missing for %d cycles; limiting to minimum %.0f W",
+            b.missing_cycles,
+            _MIN_CHARGE_W,
+        )
+        result = min(_MIN_CHARGE_W, b.hold_ceiling_w)
+    else:
+        # Debounce window: hold. Never ramp above the tightest output seen since data became invalid
+        # (the last valid output, or the minimum if there is none).
+        result = min(setpoint, b.hold_ceiling_w)
+        if b.cap_w is not None:
+            result = min(result, max(b.cap_w, _MIN_CHARGE_W))
+    if usable:
+        result = min(result, _protect(loop, [_Phase(loop, n, now) for n in usable], result, partial=True))
+    b.hold_ceiling_w = min(b.hold_ceiling_w, result)
+    return result
+
+
+def limit_phase_current(loop: SamplingLoopProtocol, setpoint: float, now: float | None = None) -> float:
+    """Return the TOTAL setpoint after main-breaker protection (only ever reduces it)."""
+    now = _time.monotonic() if now is None else now
+    state = loop._state
+    b: BreakerLimiterState = loop._breaker
+
+    # Standby: no EV Modbus activity, limiter irrelevant.
+    if state.charge_mode == "Standby":
+        loop._breaker = BreakerLimiterState()
+        _clear_throttles()
+        return setpoint
+
+    # --- Fail-safe on missing / stale / implausible data ---------------------------------
+    usable = [n for n in _PHASES if b.phase_fresh[n - 1] and _window(loop, n, now)]
+    if len(usable) < _PHASE_COUNT:
+        return _limit_with_missing_data(loop, setpoint, now, usable)
+    if b.missing_cycles:
+        b.missing_cycles = 0
+        _throttle.clear("breaker_failsafe")
+    b.hold_ceiling_w = None
+
+    phases = [_Phase(loop, n, now) for n in _PHASES]
+
+    # --- Stop latch (evaluated before the setpoint<=0 early return so it can release) ----
+    if b.stopped:
+        if not all(ph.can_restart_at_minimum() for ph in phases):
+            b.last_applied_w = None
+            return 0.0
+        b.stopped = False
+        b.cap_w = _MIN_CHARGE_W
+        b.restart_at_minimum = True
+        b.min_overload_cycles = 0
+        _throttle.clear("breaker_stop")
+        logger.info("Breaker protection: grid import recovered, releasing stop latch (restart capped at minimum)")
+
+    if setpoint <= 0:
+        b.last_applied_w = None
+        if not b.stopped:
+            if not b.restart_at_minimum:
+                b.cap_w = None
+            b.min_overload_cycles = 0
+        return setpoint
+
+    return _protect(loop, phases, setpoint, partial=False, now=now)

@@ -60,6 +60,7 @@ class ControlLoop:
         self._grid_power_samples: list[tuple[float, float]] = []
         self._battery_power_samples: list[tuple[float, float]] = []
         self._phase_samples: list[list[PhaseSample]] = [[], [], []]
+        self._prev_ev_fresh: bool = True
         self._breaker = BreakerLimiterState()
         self._state_machine = ChargingStateMachine(self)
 
@@ -96,7 +97,13 @@ class ControlLoop:
                 await self._ev_client.read()
 
             record_samples(self)
-            record_phase_samples(self)
+            # EV-dependent history is only valid while EV readings are fresh. Drop it whenever EV reads
+            # stop or resume (Standby) so retained EV currents never pair with new grid readings.
+            ev_fresh = not self._standby_write_quiet and self._state.charge_mode != "Standby"
+            if ev_fresh != self._prev_ev_fresh:
+                self._phase_samples = [[], [], []]
+                self._prev_ev_fresh = ev_fresh
+            record_phase_samples(self, ev_fresh=ev_fresh)
 
             if self._state.ev_connected and self._prev_ev_connected is not True:
                 logger.info("EV vehicle connected")
