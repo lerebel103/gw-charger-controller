@@ -63,7 +63,7 @@ Export never creates headroom and never offsets import on another phase or in ti
    two consecutive cycles (the debounce window) the limiter **holds**: the output is
    `min(setpoint, hold ceiling)`. The ceiling starts at the last output **confirmed written** to the charger (the
    minimum charge power if there is none). The loop records the baseline only when `write_setpoint` returns
-   `True` (written, or already at that value), so a failed 6000 -> 11000 W write keeps the baseline at 6000 W and is **monotonically tightened** to every output returned while data stays
+   `True` (written, or already at that value), so a failed 6000 -> 11000 W write keeps the baseline at 6000 W. The ceiling is **monotonically tightened** to every output returned while data stays
    missing, including 0. A request of 5000 W after a valid 6000 W is held at 5000 W, and a following 11000 W
    request still returns 5000 W. The ceiling resets when valid data returns. The output never ramps up on
    missing data; an active cap is still honoured. From the **3rd** consecutive cycle (about 20 s at a 10 s loop
@@ -220,6 +220,8 @@ drawing `I_ev` the cap is `3 x V x (I_ev - 1.4 A)`. A power-based limit would ne
 | EV current range validation (6553.5 A and negative values are missing) | `TestEvCurrentRange`, `test_modbus_ev.py::TestEvRawCurrentRangeAndWriteResult` |
 | Hold baseline from confirmed writes only (failed 6000 -> 11000 W keeps 6000 W) | `TestConfirmedWriteBaseline` |
 | Lowest-cap binding phase (233 V, 27/26 A, EV 16/8 A -> L2 5312 W) | `TestLowestCapBinds` |
+| Fast trip logs the lowest-cap phase, not the highest raw import | `TestLowestCapBinds` |
+| Probe CSV schema keeps `vxi_*` when the V/I block read fails | `test_victron_probe.py` |
 | Grid samples recorded independently of EV availability | `TestGridRecordedIndependentlyOfEv` |
 | Edges, run_loop integration | `TestEdges`, `TestRunLoopIntegration` |
 | Eco anti-windup, follow-guard allowance | `test_breaker_eco_antiwindup.py` |

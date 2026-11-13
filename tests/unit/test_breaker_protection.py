@@ -768,6 +768,16 @@ class TestLowestCapBinds:
         assert loop._breaker.last_binding_phase == 2
         assert "binding phase L2" in caplog.text
 
+    def test_fast_trip_logs_lowest_cap_phase_not_highest_raw(self, caplog):
+        loop, state = _loop()
+        # L1 has the higher raw import but the looser cap; both exceed 90% of the breaker (28.8 A).
+        set_inputs(state, (None, None, None), i=(30.0, 29.0, 0.0), ev_w=(16.0 * V, 8.0 * V, 0.0))
+        out = run_cycle(loop, 11000.0, 0.0)
+        assert out == 4400.0
+        assert loop._breaker.last_binding_phase == 2
+        assert "Breaker fast trip: L2 " in caplog.text
+        assert "Breaker fast trip: L1 " not in caplog.text
+
 
 class TestGridRecordedIndependentlyOfEv:
     def test_ev_read_failure_keeps_headroom_fresh_and_ev_missing(self):
