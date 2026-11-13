@@ -45,6 +45,10 @@ class AppState:
     ev_current_a: float | None = None
     ev_current_b: float | None = None
     ev_current_c: float | None = None
+    # Charger-reported phase currents WITHOUT correction_pct (used by breaker protection)
+    ev_current_raw_a: float | None = None
+    ev_current_raw_b: float | None = None
+    ev_current_raw_c: float | None = None
     ev_completion_time_h: int | None = None
     ev_total_energy_wh: float | None = None
     ev_plug_and_charge: bool = False

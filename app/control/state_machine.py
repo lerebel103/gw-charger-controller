@@ -255,9 +255,10 @@ class ChargingStateMachine:
         logger.info("Charging event: started%s (mode=%s)", log_suffix, state.charge_mode)
 
     def transition_to_charging(self, setpoint: float, *, reset_stop_timers: bool) -> float:
-        self.set_session_state(ChargeSessionState.CHARGING)
+        # Assign before set_session_state so its transition log shows the new setpoint, not a stale one.
         self.loop._session_origin_mode = self.loop._state.charge_mode
         self.loop._last_positive_setpoint = setpoint
+        self.set_session_state(ChargeSessionState.CHARGING)
         if reset_stop_timers:
             self.loop._stopping_at = None
             self.loop._stopped_at = None

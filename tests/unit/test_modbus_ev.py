@@ -139,6 +139,10 @@ class TestEVChargerModbusClient:
         assert state.ev_current_a == pytest.approx(16.0 * 1.056)
         assert state.ev_current_b == pytest.approx(15.5 * 1.056)
         assert state.ev_current_c == pytest.approx(15.8 * 1.056)
+        # Raw currents bypass correction_pct (breaker protection needs the charger-reported value)
+        assert state.ev_current_raw_a == pytest.approx(16.0)
+        assert state.ev_current_raw_b == pytest.approx(15.5)
+        assert state.ev_current_raw_c == pytest.approx(15.8)
         assert state.ev_active_power_w == pytest.approx(11000.0 * 1.056)
         assert state.ev_session_energy_wh == 5000.0
         assert state.ev_charger_status == 3
@@ -718,3 +722,32 @@ class TestEVChargerModbusClient:
         assert state.ev_active_power_w == 5000.0
         assert state.ev_session_energy_wh == 2000.0
         assert state.ev_connected is True
+
+
+class TestEvRawCurrentRangeAndWriteResult:
+    @pytest.mark.asyncio
+    async def test_out_of_range_raw_current_is_none(self):
+        state = AppState(ev_charger_ip="192.168.1.20", ev_charger_port=502)
+        ec = EVChargerModbusClient(state)
+        ec._client = AsyncMock()
+        ec._client.read_holding_registers = AsyncMock(
+            side_effect=[_make_response([2280, 2290, 2270, 65535, 160, 410, 110, 50, 3]), _make_response([2, 1])]
+        )
+        with pytest.raises(StopAsyncIteration):  # later register reads are not mocked; decode happens first
+            await ec._read_registers()
+        assert state.ev_current_raw_a is None
+        assert state.ev_current_raw_b == pytest.approx(16.0)
+        assert state.ev_current_raw_c is None
+
+    @pytest.mark.asyncio
+    async def test_write_setpoint_returns_confirmation(self):
+        state = AppState(ev_charger_ip="192.168.1.20", ev_charger_port=502, ev_connected=True)
+        ec = EVChargerModbusClient(state)
+        client = AsyncMock()
+        client.connected = True
+        client.write_register = AsyncMock(return_value=_make_response([]))
+        ec._client = client
+        assert await ec.write_setpoint(5000) is True
+        assert await ec.write_setpoint(5000) is True  # already at the confirmed value
+        client.write_register = AsyncMock(side_effect=OSError("boom"))
+        assert await ec.write_setpoint(6000) is False

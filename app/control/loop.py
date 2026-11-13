@@ -5,19 +5,15 @@ import logging
 import time as _time
 
 from app.config import ConfigManager
+from app.control.breaker import confirm_applied, limit_phase_current, phase_headroom_pct, record_phase_samples
+from app.control.breaker_state import BreakerLimiterState, PhaseSample
 from app.control.constants import (
-    _BREAKER_SAFETY_FRACTION,
     _EV_MAX_SOC_DEFAULT,
     _MIN_CHARGE_W,
     _STOP_PRESET_W,
 )
-from app.control.mode_strategies import compute_setpoint
-from app.control.power_utils import (
-    limit_phase_current,
-    mean_phase_current,
-    record_phase_current_samples,
-    record_samples,
-)
+from app.control.mode_strategies import clamp_eco_day_to_applied, compute_setpoint
+from app.control.power_utils import record_samples
 from app.control.protocols import VictronClientProtocol
 from app.control.snapshot import build_snapshot
 from app.control.state_machine import (
@@ -63,10 +59,9 @@ class ControlLoop:
         self._standby_write_quiet: bool = False
         self._grid_power_samples: list[tuple[float, float]] = []
         self._battery_power_samples: list[tuple[float, float]] = []
-        self._l1_current_samples: list[tuple[float, float]] = []
-        self._l2_current_samples: list[tuple[float, float]] = []
-        self._l3_current_samples: list[tuple[float, float]] = []
-        self._breaker_cap_tripped: bool = False
+        self._phase_samples: list[list[PhaseSample]] = [[], [], []]
+        self._prev_ev_fresh: bool = True
+        self._breaker = BreakerLimiterState()
         self._state_machine = ChargingStateMachine(self)
 
     async def _apply_ev_output(self, setpoint: float, suppress_ev_writes: bool) -> None:
@@ -74,7 +69,9 @@ class ControlLoop:
             return
 
         if setpoint > 0:
-            await self._ev_client.write_setpoint(setpoint)
+            # Only a confirmed write becomes the breaker hold baseline.
+            if await self._ev_client.write_setpoint(setpoint) is True:
+                confirm_applied(self, setpoint)
             if self._state_machine.should_send_start_command(setpoint):
                 await self._ev_client.start_charging()
             return
@@ -102,7 +99,13 @@ class ControlLoop:
                 await self._ev_client.read()
 
             record_samples(self)
-            record_phase_current_samples(self)
+            # EV-dependent history is only valid while EV readings are fresh. Drop it whenever EV reads
+            # stop or resume (Standby) so retained EV currents never pair with new grid readings.
+            ev_fresh = not self._standby_write_quiet and self._state.charge_mode != "Standby"
+            if ev_fresh != self._prev_ev_fresh:
+                self._phase_samples = [[], [], []]
+                self._prev_ev_fresh = ev_fresh
+            record_phase_samples(self, ev_fresh=ev_fresh)
 
             if self._state.ev_connected and self._prev_ev_connected is not True:
                 logger.info("EV vehicle connected")
@@ -123,31 +126,17 @@ class ControlLoop:
 
             setpoint = compute_setpoint(self)
             setpoint = self._state_machine.apply_charging_events(setpoint)
+            requested = setpoint
             setpoint = limit_phase_current(self, setpoint)
+            clamp_eco_day_to_applied(self, requested, setpoint)
             suppress_ev_writes = self._state_machine.should_suppress_ev_writes(setpoint)
             await self._apply_ev_output(setpoint, suppress_ev_writes)
             self._state.commanded_setpoint_w = setpoint
 
-            # Compute breaker headroom diagnostics for snapshot (FR-11)
-            safety_limit = _BREAKER_SAFETY_FRACTION * self._state.grid_breaker_limit_a
-            raw_currents = (
-                self._state.victron_l1_current_a,
-                self._state.victron_l2_current_a,
-                self._state.victron_l3_current_a,
-            )
-            headroom_phases = (
-                (1, "l1_breaker_headroom_pct"),
-                (2, "l2_breaker_headroom_pct"),
-                (3, "l3_breaker_headroom_pct"),
-            )
-            for phase, attr in headroom_phases:
-                raw_i = raw_currents[phase - 1]
-                mean_i = mean_phase_current(self, phase)
-                if raw_i is not None and mean_i is not None and safety_limit > 0:
-                    headroom = (safety_limit - mean_i) / safety_limit * 100.0
-                    setattr(self._state, attr, min(headroom, 100.0))
-                else:
-                    setattr(self._state, attr, None)
+            # Breaker headroom diagnostics (from 30 s mean import current vs 80 % limit)
+            self._state.l1_breaker_headroom_pct = phase_headroom_pct(self, 1)
+            self._state.l2_breaker_headroom_pct = phase_headroom_pct(self, 2)
+            self._state.l3_breaker_headroom_pct = phase_headroom_pct(self, 3)
 
             await self._publish_queue.put(build_snapshot(self))
             await asyncio.sleep(self._state.control_loop_interval_s)

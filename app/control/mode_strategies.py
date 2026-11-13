@@ -4,8 +4,10 @@ import logging
 import time as _time
 from abc import ABC, abstractmethod
 
+from app.control.breaker import measured_ev_phase_powers_w
 from app.control.constants import (
     _ECO_DAY_COOLDOWN_S,
+    _ECO_DAY_FOLLOW_ALLOWANCE_W,
     _EV_MAX_SOC_MARGIN_PCT,
     _MAX_CHARGE_W,
     _MIN_CHARGE_W,
@@ -251,6 +253,16 @@ class EcoDayModeHandler(ModeSetpointHandler):
             loop._eco_day_setpoint_w -= state.eco_day_ramp_step_w
         else:
             loop._eco_day_setpoint_w += state.eco_day_ramp_step_w
+            # "EV is following" guard: the setpoint is a TOTAL hint over 3 phases. Never wind it
+            # more than a tracking allowance above what the car actually draws (3 x busiest phase), e.g.
+            # a single-phase car only ever realises ~1/3 of the setpoint. Uses the calibrated current
+            # (like the written setpoint) and an allowance of at least _ECO_DAY_FOLLOW_ALLOWANCE_W so
+            # quantisation in write_setpoint() and small under-reporting cannot stall the ramp.
+            follow = measured_ev_phase_powers_w(state, calibrated=True)
+            if follow is not None:
+                allowance = max(state.eco_day_ramp_step_w, _ECO_DAY_FOLLOW_ALLOWANCE_W)
+                follow_limit = max(_MIN_CHARGE_W, 3.0 * max(follow) + allowance)
+                loop._eco_day_setpoint_w = min(loop._eco_day_setpoint_w, follow_limit)
 
         loop._eco_day_setpoint_w = clamp(loop._eco_day_setpoint_w, _MIN_CHARGE_W, _MAX_CHARGE_W)
         loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_RAMPING)
@@ -316,3 +328,10 @@ def setpoint_eco_night(loop: ModeLoopProtocol) -> float:
 def setpoint_eco_day(loop: ModeLoopProtocol) -> float:
     """Eco outside discharge window: charge from excess solar."""
     return _ECO_DAY_HANDLER.compute(loop)
+
+
+def clamp_eco_day_to_applied(loop: ModeLoopProtocol, requested: float, applied: float) -> None:
+    """Anti-windup: when the breaker limiter reduced an eco-day ramp request, pull the ramp down to it."""
+    if loop._charge_mode_state != ChargeModeState.ECO_DAY_RAMPING or applied >= requested:
+        return
+    loop._eco_day_setpoint_w = max(_MIN_CHARGE_W, min(loop._eco_day_setpoint_w, applied))

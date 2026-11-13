@@ -37,6 +37,10 @@ _REG_CHARGER_ENABLE = 10060
 _RAW_SETPOINT_MIN = 44  # practical minimum to reliably start charging (= 4.4 kW)
 _RAW_RUNTIME_SETPOINT_MIN = 42  # documented physical minimum (= 4.2 kW)
 _RAW_SETPOINT_MAX = 220  # 22.0 kW
+# Plausible per-phase current range for the 22 kW charger (32 A rated, 1.25x margin). A reading outside
+# 0..EV_MAX_PHASE_CURRENT_A (e.g. 0xFFFF -> 6553.5 A) is a bad register value, not a measurement.
+EV_MAX_PHASE_CURRENT_A = 40.0
+
 _RECONNECT_DELAY_S = 1.0
 _RECONNECT_DELAY_MAX_S = 60.0
 _CONNECT_TIMEOUT_S = 3.0
@@ -135,6 +139,7 @@ class EVChargerModbusClient:
         """Read all registers and update AppState."""
         if not self.connected:
             self._state.ev_comm_healthy = False
+            self._clear_raw_currents()
             return
         try:
             await self._read_registers()
@@ -147,6 +152,7 @@ class EVChargerModbusClient:
             self._consecutive_read_failures += 1
             self._state.ev_comm_healthy = False
             self._state.ev_last_read_error_at = _t.monotonic()
+            self._clear_raw_currents()
             _throttle.warning("ev_read_fail", "EV charger read failed: %s", exc)
             if self._consecutive_read_failures >= _MAX_CONSECUTIVE_READ_FAILURES:
                 await self._close()
@@ -155,7 +161,7 @@ class EVChargerModbusClient:
     # Write
     # ------------------------------------------------------------------
 
-    async def write_setpoint(self, power_w: float) -> None:
+    async def write_setpoint(self, power_w: float) -> bool:
         """Write the maximum charging power register.
 
         Compares the desired raw value against the charger's actual register
@@ -169,20 +175,24 @@ class EVChargerModbusClient:
                 - 4.2 kW may be used by the control loop immediately before an
                   explicit stop command to keep register values in-range while
                   intentionally stopping charging.
+
+        Returns:
+            True only when the charger register is confirmed at the requested value (written
+            successfully, or already equal to the value read on the last poll).
         """
         if not self._state.ev_connected and power_w > 0:
-            return
+            return False
 
         if not self.connected:
             _throttle.warning("ev_write_setpoint_disconnected", "write_setpoint skipped: Modbus not connected")
-            return
+            return False
 
         raw = round(power_w / 100) if power_w > 0 else 0
         if raw > 0 and raw < _RAW_SETPOINT_MIN:
             raw = _RAW_SETPOINT_MIN
 
         if self._state.ev_charger_setpoint_raw is not None and raw == self._state.ev_charger_setpoint_raw:
-            return
+            return True
 
         try:
             resp = await self._client.write_register(address=_REG_MAX_CHARGING_POWER, value=raw, device_id=_SLAVE_ID)
@@ -191,8 +201,10 @@ class EVChargerModbusClient:
             self._state.ev_charger_setpoint_raw = raw
             _throttle.clear("ev_setpoint_write_fail")
             logger.debug("Wrote charging setpoint raw=%d (%.0f W)", raw, power_w)
+            return True
         except (ModbusException, OSError) as exc:
             _throttle.warning("ev_setpoint_write_fail", "EV charger setpoint write failed: %s", exc)
+            return False
 
     async def ensure_plug_and_charge(self) -> None:
         """Ensure plug-and-charge is enabled. Writes register 10019=1 if not already set."""
@@ -408,6 +420,16 @@ class EVChargerModbusClient:
         self._state.ev_comm_healthy = False
         self._serial_read_attempted = False
 
+    @staticmethod
+    def _valid_raw_current(amps: float) -> float | None:
+        return amps if 0.0 <= amps <= EV_MAX_PHASE_CURRENT_A else None
+
+    def _clear_raw_currents(self) -> None:
+        """Clear raw phase currents so stale readings are never used for breaker protection."""
+        self._state.ev_current_raw_a = None
+        self._state.ev_current_raw_b = None
+        self._state.ev_current_raw_c = None
+
     async def disconnect(self) -> None:
         """Close the current Modbus connection.
 
@@ -433,6 +455,10 @@ class EVChargerModbusClient:
         self._state.ev_voltage_l1_v = regs[0] / 10.0
         self._state.ev_voltage_l2_v = regs[1] / 10.0
         self._state.ev_voltage_l3_v = regs[2] / 10.0
+        # Out-of-range raw currents are stored as None (missing) so the breaker limiter fails safe.
+        self._state.ev_current_raw_a = self._valid_raw_current(regs[3] / 10.0)
+        self._state.ev_current_raw_b = self._valid_raw_current(regs[4] / 10.0)
+        self._state.ev_current_raw_c = self._valid_raw_current(regs[5] / 10.0)
         self._state.ev_current_a = (regs[3] / 10.0) * correction_factor
         self._state.ev_current_b = (regs[4] / 10.0) * correction_factor
         self._state.ev_current_c = (regs[5] / 10.0) * correction_factor
