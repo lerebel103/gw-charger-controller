@@ -89,6 +89,15 @@ Export never creates headroom and never offsets import on another phase or in ti
 
    `cap_w = 3 x V[n] x max(0, mean I_ev[n] - excess_A)`
 
+   **Paired samples.** In the cap, `excess_A` and `mean I_ev[n]` are both computed over the same set of window
+   samples: only those where the grid current and a valid EV current are both present. Grid-only samples (EV read
+   failed) stay in the full-window mean used for overload detection, headroom and the raw fast trip, but never
+   enter the cap. Otherwise a grid-only run at 24 A followed by paired samples at 28 A / 12 A (233 V) would give
+   8108 W (mixed mean 26 A) instead of 6710 W (paired mean 28 A, excess 2.4 A). Overload is detected from the
+   full mean; the cap excess is `max(paired mean - I_lim, 0)`. If the full mean is over the threshold but the
+   paired excess is <= 0, the cap is anchored at the measured EV delivery (`3 x V x mean I_ev`): it is neither
+   removed nor raised. A phase with no paired sample in the window counts as missing data (hold, then minimum).
+
    The factor 3 is there because the setpoint is a TOTAL split equally over three phases, whatever the car does.
    The cap ratchets down only (`cap_w = min(cap_w, new)`) and the output is `min(setpoint, max(cap_w, 4400 W))`.
    Using the same window for import and EV current avoids a lagging grid mean cutting after the EV has already
@@ -223,6 +232,7 @@ drawing `I_ev` the cap is `3 x V x (I_ev - 1.4 A)`. A power-based limit would ne
 | Fast trip logs the lowest-cap phase, not the highest raw import | `TestLowestCapBinds` |
 | Probe CSV schema keeps `vxi_*` when the V/I block read fails | `test_victron_probe.py` |
 | Grid samples recorded independently of EV availability | `TestGridRecordedIndependentlyOfEv` |
+| Cap from paired grid/EV samples (24 A grid-only then 28 A / 12 A -> 6710 W, not 8108 W; no paired sample -> missing data; paired excess <= 0 -> anchored at EV delivery) | `TestCapUsesPairedSamples` |
 | Edges, run_loop integration | `TestEdges`, `TestRunLoopIntegration` |
 | Eco anti-windup, follow-guard allowance | `test_breaker_eco_antiwindup.py` |
 | Modbus plumbing (signed decode, gross-sanity, read failure clears currents) | `test_modbus_victron.py`, `test_modbus_ev.py` |

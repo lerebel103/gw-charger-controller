@@ -165,17 +165,24 @@ class _Phase:
         self.i_lim = _BREAKER_SAFETY_FRACTION * i_brk
         count = len(samples)
         self.mean_a = sum(s.import_a for s in samples) / count
-        ev_samples = [s.ev_a for s in samples if s.ev_a is not None]
-        # Fresh phases always have a valid latest EV sample; earlier gaps are simply left out of the mean.
-        self.mean_ev_a = sum(ev_samples) / len(ev_samples) if ev_samples else 0.0
+        # Cap inputs come from PAIRED samples only (grid and EV both present), so the excess and the mean EV
+        # current describe the same observations. Grid-only samples still feed mean_a (overload detection,
+        # headroom) and raw_a (fast trip). Usable phases always have at least one paired sample.
+        paired = [s for s in samples if s.ev_a is not None]
+        self.mean_ev_a = sum(s.ev_a for s in paired) / len(paired)  # type: ignore[misc]
+        paired_mean_a = sum(s.import_a for s in paired) / len(paired)
         self.raw_a = samples[-1].import_a
         self.ev_active = (_ev_current_raw(state, n) or 0.0) > _PHASE_ACTIVE_THRESHOLD_A
+        # Overload detection uses the full-window mean.
         self.excess_a = self.mean_a - self.i_lim
         self.fast_a = _BREAKER_INSTANT_THRESHOLD_FRACTION * i_brk
         self.fast = self.raw_a > self.fast_a
         self.over = self.excess_a > 0 or self.fast
+        # The cap uses the paired excess, floored at 0. If the full mean is over the threshold but the paired
+        # excess is <= 0, the cap stays anchored at the measured EV delivery (never uncapped, never raised).
+        self.cap_excess_a = max(paired_mean_a - self.i_lim, 0.0)
         # The setpoint is a TOTAL over 3 phases split equally, so the per-phase EV current maps to 3x watts.
-        self.cap_w = max(0.0, 3.0 * self.v * (self.mean_ev_a - max(self.excess_a, 0.0)))
+        self.cap_w = max(0.0, 3.0 * self.v * (self.mean_ev_a - self.cap_excess_a))
 
     def has_release_margin(self) -> bool:
         return self.mean_a < self.i_lim - _BREAKER_RELEASE_MARGIN_A
@@ -246,7 +253,7 @@ def _protect(
             ph.mean_a,
             ph.i_lim,
             ph.mean_ev_a,
-            max(ph.excess_a, 0.0),
+            ph.cap_excess_a,
             ph.cap_w,
         )
 
@@ -341,7 +348,8 @@ def limit_phase_current(loop: SamplingLoopProtocol, setpoint: float, now: float 
         return setpoint
 
     # --- Fail-safe on missing / stale data ---------------------------------
-    usable = [n for n in _PHASES if b.phase_fresh[n - 1] and _window(loop, n, now)]
+    # A phase needs at least one paired (grid + EV) sample in the window for the cap; otherwise it is missing.
+    usable = [n for n in _PHASES if b.phase_fresh[n - 1] and any(s.ev_a is not None for s in _window(loop, n, now))]
     if len(usable) < _PHASE_COUNT:
         return _limit_with_missing_data(loop, setpoint, now, usable)
     if b.missing_cycles:

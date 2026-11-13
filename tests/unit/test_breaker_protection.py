@@ -791,3 +791,45 @@ class TestGridRecordedIndependentlyOfEv:
         assert phase_headroom_pct(loop, 1, now=t) < 100.0 - 1.0
         assert limit_phase_current(loop, 11000.0, now=t) == 6000.0  # EV data missing -> hold
         assert loop._breaker.missing_cycles == 1
+
+
+class TestCapUsesPairedSamples:
+    """PR #25 round 3: the cap combines grid and EV means over the same (paired) samples only."""
+
+    @staticmethod
+    def _grid_only(loop, state, amps, t):
+        set_inputs(state, (None, None, None), i=(amps, 0.0, 0.0))
+        state.ev_current_raw_a = state.ev_current_raw_b = state.ev_current_raw_c = None  # EV read failed
+        record_phase_samples(loop, now=t)
+
+    def test_copilot_scenario_cap_from_paired_samples_is_safe(self):
+        loop, state = _loop()
+        self._grid_only(loop, state, 24.0, 0.0)
+        self._grid_only(loop, state, 24.0, 10.0)
+        set_inputs(state, (None, None, None), i=(28.0, 0.0, 0.0), ev_w=(12.0 * V, 0.0, 0.0))
+        assert run_cycle(loop, 11000.0, 20.0) == 11000.0  # window mean 25.3 A: below the threshold
+        out = run_cycle(loop, 11000.0, 30.0)  # full mean 26 A: over
+        assert out == pytest.approx(3 * V * (12.0 - 2.4))  # about 6710 W, not 8108 W
+        assert out < 3 * V * (12.0 - 0.4)
+        household_a = 16.0
+        assert household_a + out / 3 / V <= I_LIM + 1e-9
+
+    def test_overload_without_any_paired_sample_takes_missing_data_path(self):
+        loop, state = _loop()
+        set_inputs(state, (None, None, None), i=(27.0, 0.0, 0.0), ev_w=(10.0 * V, 0.0, 0.0))
+        for t in (0.0, 10.0, 20.0):
+            self._grid_only(loop, state, 27.0, t)
+        set_inputs(state, (None, None, None), i=(27.0, 0.0, 0.0), ev_w=(10.0 * V, 0.0, 0.0))
+        loop._breaker.phase_fresh = [True, True, True]  # even if flagged fresh, no paired sample -> missing
+        assert limit_phase_current(loop, 11000.0, now=20.0) == _MIN_CHARGE_W
+        assert loop._breaker.missing_cycles == 1
+
+    def test_full_mean_over_but_paired_excess_not_positive_stays_anchored_at_ev_delivery(self):
+        loop, state = _loop()
+        self._grid_only(loop, state, 28.0, 0.0)
+        self._grid_only(loop, state, 28.0, 10.0)
+        set_inputs(state, (None, None, None), i=(24.0, 0.0, 0.0), ev_w=(12.0 * V, 0.0, 0.0))
+        run_cycle(loop, 11000.0, 20.0)
+        out = run_cycle(loop, 11000.0, 30.0)  # full mean 26 A over, paired mean 24 A under
+        assert loop._breaker.cap_w == pytest.approx(3 * V * 12.0)  # capped at measured delivery, not uncapped
+        assert out == pytest.approx(3 * V * 12.0)
