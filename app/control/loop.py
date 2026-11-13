@@ -5,7 +5,7 @@ import logging
 import time as _time
 
 from app.config import ConfigManager
-from app.control.breaker import limit_phase_current, phase_headroom_pct, record_phase_samples
+from app.control.breaker import confirm_applied, limit_phase_current, phase_headroom_pct, record_phase_samples
 from app.control.breaker_state import BreakerLimiterState, PhaseSample
 from app.control.constants import (
     _EV_MAX_SOC_DEFAULT,
@@ -69,7 +69,9 @@ class ControlLoop:
             return
 
         if setpoint > 0:
-            await self._ev_client.write_setpoint(setpoint)
+            # Only a confirmed write becomes the breaker hold baseline.
+            if await self._ev_client.write_setpoint(setpoint) is True:
+                confirm_applied(self, setpoint)
             if self._state_machine.should_send_start_command(setpoint):
                 await self._ev_client.start_charging()
             return

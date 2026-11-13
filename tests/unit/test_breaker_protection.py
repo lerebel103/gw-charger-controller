@@ -705,3 +705,79 @@ class TestStandbySampleInvalidation:
         assert cl._breaker.cap_w is None
         assert not cl._breaker.stopped
         assert all(s.import_a == pytest.approx(1000.0 / V) for s in cl._phase_samples[0])
+
+
+# ---------------------------------------------------------------------------
+# PR #25 round 2
+# ---------------------------------------------------------------------------
+class TestEvCurrentRange:
+    def test_impossible_raw_current_is_missing_not_inflating(self):
+        loop, state = _loop()
+        t = _warmup(loop, state, setpoint=6000.0)
+        set_inputs(state, (1500.0, -1000.0, -1000.0), ev_w=(1467.0, 0.0, 0.0))
+        state.ev_current_raw_a = 6553.5  # 0xFFFF register
+        assert run_cycle(loop, 11000.0, t) == 6000.0  # hold
+        assert run_cycle(loop, 11000.0, t + CYCLE_S) == 6000.0
+        assert run_cycle(loop, 11000.0, t + 2 * CYCLE_S) == _MIN_CHARGE_W
+        assert loop._breaker.missing_cycles == 3
+
+    def test_negative_raw_current_is_missing(self):
+        loop, state = _loop()
+        set_inputs(state, (1500.0, -1000.0, -1000.0))
+        state.ev_current_raw_b = -1.0
+        record_phase_samples(loop, now=0.0)
+        assert loop._breaker.phase_fresh == [True, False, True]
+
+
+class TestConfirmedWriteBaseline:
+    def test_failed_increase_does_not_raise_hold_ceiling(self):
+        loop, state = _loop()
+        t = _warmup(loop, state, setpoint=6000.0)
+        # Output rises to 11000 W but the Modbus write fails: no confirmation.
+        record_phase_samples(loop, now=t)
+        assert limit_phase_current(loop, 11000.0, now=t) == 11000.0
+        assert loop._breaker.last_applied_w == 6000.0
+        set_inputs(state, (None, -1000.0, -1000.0), ev_w=(1467.0, 0.0, 0.0))
+        assert run_cycle(loop, 11000.0, t + CYCLE_S) == 6000.0
+        assert loop._breaker.hold_ceiling_w == 6000.0
+
+    @pytest.mark.asyncio
+    async def test_loop_confirms_only_after_successful_write(self):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from app.control.loop import ControlLoop
+
+        state = make_state()
+        ev = AsyncMock()
+        cl = ControlLoop(state, MagicMock(), ev, asyncio.Queue())
+        ev.write_setpoint = AsyncMock(return_value=False)
+        await cl._apply_ev_output(9000.0, False)
+        assert cl._breaker.last_applied_w is None
+        ev.write_setpoint = AsyncMock(return_value=True)
+        await cl._apply_ev_output(9000.0, False)
+        assert cl._breaker.last_applied_w == 9000.0
+
+
+class TestLowestCapBinds:
+    def test_lowest_cap_phase_binds_not_largest_excess(self, caplog):
+        loop, state = _loop()
+        set_inputs(state, (None, None, None), i=(27.0, 26.0, 0.0), ev_w=(16.0 * V, 8.0 * V, 0.0))
+        out = run_cycle(loop, 11000.0, 0.0)
+        assert out == pytest.approx(3 * V * (8.0 - 0.4))  # L2 cap 5312 W, not L1's 10205 W
+        assert loop._breaker.last_binding_phase == 2
+        assert "binding phase L2" in caplog.text
+
+
+class TestGridRecordedIndependentlyOfEv:
+    def test_ev_read_failure_keeps_headroom_fresh_and_ev_missing(self):
+        loop, state = _loop()
+        t = _warmup(loop, state, setpoint=6000.0)
+        set_inputs(state, (P_LIM / 2, -1000.0, -1000.0))
+        state.ev_current_raw_a = state.ev_current_raw_b = state.ev_current_raw_c = None  # EV read failed
+        record_phase_samples(loop, now=t)
+        assert loop._breaker.phase_fresh == [False, False, False]
+        # Headroom moves towards the fresh grid reading instead of the old buffered value.
+        assert phase_headroom_pct(loop, 1, now=t) < 100.0 - 1.0
+        assert limit_phase_current(loop, 11000.0, now=t) == 6000.0  # EV data missing -> hold
+        assert loop._breaker.missing_cycles == 1

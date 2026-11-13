@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.control.breaker import limit_phase_current, record_phase_samples
+from app.control.breaker import confirm_applied, limit_phase_current, record_phase_samples
 from app.state import AppState
 
 V = 233.0
@@ -49,4 +49,6 @@ def set_inputs(
 def run_cycle(loop, setpoint: float, t: float) -> float:
     """One control cycle at synthetic time *t*: record samples then limit."""
     record_phase_samples(loop, now=t)
-    return limit_phase_current(loop, setpoint, now=t)
+    out = limit_phase_current(loop, setpoint, now=t)
+    confirm_applied(loop, out)  # model a successful charger write
+    return out

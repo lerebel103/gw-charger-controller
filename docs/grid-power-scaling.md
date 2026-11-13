@@ -56,10 +56,14 @@ Export never creates headroom and never offsets import on another phase or in ti
    is genuinely absent: a failed read, `None`, or no fresh sample this cycle (stale). Values that merely look
    odd are never "inconsistent"; there is no plausibility check. The one exception is the gross-sanity decode in
    `app/modbus/victron.py`: `|I| > 2 x grid_breaker_limit_a` is a bad decode, becomes `None`, and counts as
-   missing. If the grid current or the raw EV current is missing on any phase, count the cycle. For the first
+   missing. A raw EV current outside the charger's supported range (`0 <= I <= 40 A`,
+   `EV_MAX_PHASE_CURRENT_A`, 1.25 x the 32 A rating) is also missing: it is set to `None` when decoded in
+   `app/modbus/ev.py` (so 0xFFFF -> 6553.5 A never inflates a cap) and re-checked by the limiter. If the grid
+   current or the raw EV current is missing on any phase, count the cycle. For the first
    two consecutive cycles (the debounce window) the limiter **holds**: the output is
-   `min(setpoint, hold ceiling)`. The ceiling starts at the last value returned on a valid cycle (the minimum
-   charge power if there is none) and is **monotonically tightened** to every output returned while data stays
+   `min(setpoint, hold ceiling)`. The ceiling starts at the last output **confirmed written** to the charger (the
+   minimum charge power if there is none). The loop records the baseline only when `write_setpoint` returns
+   `True` (written, or already at that value), so a failed 6000 -> 11000 W write keeps the baseline at 6000 W and is **monotonically tightened** to every output returned while data stays
    missing, including 0. A request of 5000 W after a valid 6000 W is held at 5000 W, and a following 11000 W
    request still returns 5000 W. The ceiling resets when valid data returns. The output never ramps up on
    missing data; an active cap is still honoured. From the **3rd** consecutive cycle (about 20 s at a 10 s loop
@@ -78,7 +82,9 @@ Export never creates headroom and never offsets import on another phase or in ti
 5. **Fast trip**: the *raw* (latest-sample) `I_imp` on an EV-active phase above `0.90 x grid_breaker_limit_a`
    immediately returns the minimum setpoint (WARNING).
 6. **Trim** (mean over the threshold on an EV-active phase): the binding phase is the EV-active over-threshold
-   phase with the largest `excess_A`. The cap is anchored to the measured EV current and mapped to a total over
+   phase with the **lowest** `cap_w` (not the largest excess: with differing EV currents the larger excess can
+   be the looser cap, for example 233 V, grid 27 / 26 A, EV 16 / 8 A gives L1 10205 W but L2 5312 W, so L2
+   binds). The fast-trip log uses the same selection. The cap is anchored to the measured EV current and mapped to a total over
    three phases:
 
    `cap_w = 3 x V[n] x max(0, mean I_ev[n] - excess_A)`
@@ -181,6 +187,9 @@ drawing `I_ev` the cap is `3 x V x (I_ev - 1.4 A)`. A power-based limit would ne
   the 3rd (about 20 s at a 10 s loop), in every mode.
 - Signed currents with low or zero real power (for example `-1.8 A` at about 0 W, or L3 flipping between +2.0 A
   and -2.0 A) are valid data: no hold, no cap.
+- EV read failure (or out-of-range EV current) with a valid grid reading: the grid sample is still recorded, so
+  the import means and `phase_headroom_pct` follow the fresh grid values. The sample carries no EV current and
+  the phase is not fresh, so EV-dependent decisions take the missing-data path.
 - Standby / EV reads skipped: grid samples keep being recorded for headroom diagnostics, but without EV data
   and never marked fresh for the limiter. The sample history is cleared when EV reads stop and when they
   resume, so retained (stale) EV currents never pair with fresh grid readings after leaving Standby. No EV
@@ -208,6 +217,10 @@ drawing `I_ev` the cap is `3 x V x (I_ev - 1.4 A)`. A power-based limit would ne
 | Missing data: hold for 2 cycles, minimum on the 3rd, resume; pinned Manual, Eco-day, Eco-night; inconsistent values are not missing | `TestFailSafe` |
 | Current is authoritative: low power factor trims, same magnitude while exporting does not | `TestCurrentIsAuthoritative` |
 | Live log regression: signed -1.8 A / -1.7 A, L3 flipping +/-2.0 A, no hold, no cap | `TestLiveSignedCurrentRegression` |
+| EV current range validation (6553.5 A and negative values are missing) | `TestEvCurrentRange`, `test_modbus_ev.py::TestEvRawCurrentRangeAndWriteResult` |
+| Hold baseline from confirmed writes only (failed 6000 -> 11000 W keeps 6000 W) | `TestConfirmedWriteBaseline` |
+| Lowest-cap binding phase (233 V, 27/26 A, EV 16/8 A -> L2 5312 W) | `TestLowestCapBinds` |
+| Grid samples recorded independently of EV availability | `TestGridRecordedIndependentlyOfEv` |
 | Edges, run_loop integration | `TestEdges`, `TestRunLoopIntegration` |
 | Eco anti-windup, follow-guard allowance | `test_breaker_eco_antiwindup.py` |
 | Modbus plumbing (signed decode, gross-sanity, read failure clears currents) | `test_modbus_victron.py`, `test_modbus_ev.py` |

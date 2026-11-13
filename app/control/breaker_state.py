@@ -9,7 +9,7 @@ class PhaseSample(NamedTuple):
 
     t: float  # monotonic seconds
     import_a: float  # max(0, signed grid current): per-sample clamp, export never offsets import
-    ev_a: float  # raw (uncorrected) EV charger current on this phase
+    ev_a: float | None  # raw (uncorrected) EV charger current; None when missing/invalid (grid-only sample)
 
 
 @dataclass
@@ -19,7 +19,7 @@ class BreakerLimiterState:
     cap_w: float | None = None  # active TOTAL-setpoint cap; None = no cap
     stopped: bool = False  # stop latch: charger held at 0 until the grid has recovered
     missing_cycles: int = 0
-    last_applied_w: float | None = None  # last output applied on a valid cycle; held during the data debounce
+    last_applied_w: float | None = None  # last output CONFIRMED written to the charger; held during the data debounce
     hold_ceiling_w: float | None = None  # tightest output since data became invalid; the hold never exceeds it
     min_overload_cycles: int = 0
     last_binding_phase: int | None = None

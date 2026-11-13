@@ -34,6 +34,7 @@ from app.control.constants import (
 )
 from app.control.protocols import SamplingLoopProtocol
 from app.log_throttle import LogThrottle
+from app.modbus.ev import EV_MAX_PHASE_CURRENT_A
 from app.state import AppState
 
 logger = logging.getLogger(__name__)
@@ -60,7 +61,9 @@ def _grid_current(state: AppState, phase: int) -> float | None:
 
 
 def _ev_current_raw(state: AppState, phase: int) -> float | None:
-    return getattr(state, f"ev_current_raw_{_EV_SUFFIX[phase - 1]}")
+    """Raw EV current for the phase, or None when missing or outside the charger's supported range."""
+    i = getattr(state, f"ev_current_raw_{_EV_SUFFIX[phase - 1]}")
+    return i if i is not None and 0.0 <= i <= EV_MAX_PHASE_CURRENT_A else None
 
 
 def _grid_voltage(state: AppState, phase: int) -> float:
@@ -90,7 +93,11 @@ def measured_ev_phase_powers_w(state: AppState, calibrated: bool = False) -> tup
 
 
 def record_phase_samples(loop: SamplingLoopProtocol, now: float | None = None, ev_fresh: bool = True) -> None:
-    """Record one sample per phase (when its inputs are present) and prune the window.
+    """Record one sample per phase (whenever the grid current is present) and prune the window.
+
+    Grid current is recorded independently of EV-current availability so the import means and headroom
+    always reflect fresh grid readings. A sample without a valid EV current is stored with ``ev_a`` None and
+    the phase is not marked fresh, so EV-dependent decisions take the missing-data path.
 
     With ``ev_fresh`` False (EV reads skipped, e.g. Standby) only the grid side is recorded: the EV current is
     stored as 0 and no phase is marked fresh for the limiter, so retained EV currents never pair with new
@@ -103,10 +110,10 @@ def record_phase_samples(loop: SamplingLoopProtocol, now: float | None = None, e
         i = _grid_current(state, n)
         i_ev = _ev_current_raw(state, n) if ev_fresh else 0.0
         breaker.phase_fresh[n - 1] = False
-        if i is None or i_ev is None:
+        if i is None:
             continue
         loop._phase_samples[n - 1].append(PhaseSample(t=now, import_a=max(0.0, i), ev_a=i_ev))
-        breaker.phase_fresh[n - 1] = ev_fresh
+        breaker.phase_fresh[n - 1] = ev_fresh and i_ev is not None
     cutoff = now - _PHASE_IMPORT_MEAN_WINDOW_S
     loop._phase_samples = [[s for s in samples if s.t >= cutoff] for samples in loop._phase_samples]
 
@@ -158,7 +165,9 @@ class _Phase:
         self.i_lim = _BREAKER_SAFETY_FRACTION * i_brk
         count = len(samples)
         self.mean_a = sum(s.import_a for s in samples) / count
-        self.mean_ev_a = sum(s.ev_a for s in samples) / count
+        ev_samples = [s.ev_a for s in samples if s.ev_a is not None]
+        # Fresh phases always have a valid latest EV sample; earlier gaps are simply left out of the mean.
+        self.mean_ev_a = sum(ev_samples) / len(ev_samples) if ev_samples else 0.0
         self.raw_a = samples[-1].import_a
         self.ev_active = (_ev_current_raw(state, n) or 0.0) > _PHASE_ACTIVE_THRESHOLD_A
         self.excess_a = self.mean_a - self.i_lim
@@ -187,7 +196,7 @@ def _protect(
     """Overload protection (trim, fast trip, stop counter, gradual release) over the given phases.
 
     With ``partial`` (some phase has no usable data) protection still runs on the healthy phases, but the
-    cap is never released and ``last_applied_w`` is left untouched.
+    cap is never released.
     """
     b: BreakerLimiterState = loop._breaker
 
@@ -210,7 +219,8 @@ def _protect(
     fast = [ph for ph in over if ph.fast]
     needed: float | None = None
     if fast:
-        ph = max(fast, key=lambda x: x.raw_a)
+        # Same binding rule as the trim: the phase with the lowest cap.
+        ph = min(fast, key=lambda x: x.cap_w)
         needed = _MIN_CHARGE_W
         b.last_binding_phase = ph.n
         _throttle.warning(
@@ -224,7 +234,8 @@ def _protect(
             _MIN_CHARGE_W,
         )
     elif over:
-        ph = max(over, key=lambda x: x.excess_a)
+        # Binding phase = the most restrictive cap (not the largest excess: EV current and voltage differ).
+        ph = min(over, key=lambda x: x.cap_w)
         needed = ph.cap_w
         b.last_binding_phase = ph.n
         _throttle.info(
@@ -272,10 +283,13 @@ def _protect(
             if b.cap_w is not None:
                 result = min(setpoint, max(b.cap_w, _MIN_CHARGE_W))
 
-    result = min(result, _MAX_CHARGE_W)
-    if not partial:
-        b.last_applied_w = result
-    return result
+    return min(result, _MAX_CHARGE_W)
+
+
+def confirm_applied(loop: SamplingLoopProtocol, applied_w: float) -> None:
+    """Record the output as the hold baseline. Call only after the charger write was confirmed."""
+    if applied_w > 0 and not loop._breaker.stopped:
+        loop._breaker.last_applied_w = applied_w
 
 
 def _limit_with_missing_data(loop: SamplingLoopProtocol, setpoint: float, now: float, usable: list[int]) -> float:

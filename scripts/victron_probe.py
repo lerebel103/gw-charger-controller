@@ -60,9 +60,8 @@ async def sample(client: AsyncModbusTcpClient, meter_unit: int) -> dict[str, obj
         row[f"v_{ph}"] = vi[2 * i] / 10.0 if vi else None
         row[f"i_{ph}"] = s16(vi[2 * i + 1]) / 10.0 if vi else None
         row[f"raw_i_{ph}"] = f"0x{vi[2 * i + 1]:04x}" if vi else None
-        # Derived: V x I (signed) for comparison with power
-        if vi:
-            row[f"vxi_{ph}_va"] = round(row[f"v_{ph}"] * row[f"i_{ph}"], 1)  # type: ignore[operator]
+        # Derived: V x I (signed) for comparison with power. Always present so the CSV schema is stable.
+        row[f"vxi_{ph}_va"] = round(row[f"v_{ph}"] * row[f"i_{ph}"], 1) if vi else None  # type: ignore[operator]
     row["batt_p_w"] = s16(batt[0]) if batt else None
     row["batt_soc_pct"] = batt[1] if batt else None
     return row
