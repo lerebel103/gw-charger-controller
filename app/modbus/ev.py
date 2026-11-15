@@ -34,8 +34,9 @@ _REG_PLUG_AND_CHARGE = 10019
 _REG_SINGLE_PHASE_SWITCHING = 10023
 _REG_MAX_CHARGING_POWER = 10029
 _REG_CHARGER_ENABLE = 10060
-_REG_RATED_POWER = 10058  # read-only hardware rating: 0 = 7 kW, 1 = 11 kW, 2 = 22 kW
-_RATED_POWER_W_BY_CODE = {0: 7000.0, 1: 11000.0, 2: 22000.0}  # register 10058 code -> watts
+_REG_MAX_GRID_POWER = 10039  # RW, U16, gain 10 kW, range 14..220 (1.4-22 kW): watts = raw * 100
+_RAW_MAX_GRID_POWER_MIN = 14
+_RAW_MAX_GRID_POWER_MAX = 220
 _RAW_SETPOINT_MIN = 44  # practical minimum to reliably start charging (= 4.4 kW)
 _RAW_RUNTIME_SETPOINT_MIN = 42  # documented physical minimum (= 4.2 kW)
 _RAW_SETPOINT_MAX = 220  # 22.0 kW
@@ -50,9 +51,11 @@ _READ_RETRIES = 3
 _MAX_CONSECUTIVE_READ_FAILURES = 3  # force reconnect after this many consecutive read errors
 
 
-def decode_rated_power_w(raw: int) -> float | None:
-    """Map register 10058 (0 = 7 kW, 1 = 11 kW, 2 = 22 kW) to watts; unknown codes give None."""
-    return _RATED_POWER_W_BY_CODE.get(raw)
+def decode_max_grid_power_w(raw: int) -> float | None:
+    """Convert register 10039 (gain 10 kW, valid 14..220) to watts; out-of-range values give None."""
+    if _RAW_MAX_GRID_POWER_MIN <= raw <= _RAW_MAX_GRID_POWER_MAX:
+        return raw * 100.0
+    return None
 
 
 class EVChargerModbusClient:
@@ -352,20 +355,20 @@ class EVChargerModbusClient:
             logger.warning("Failed to read plug-and-charge auto start: %s", exc)
             return None
 
-    async def read_rated_power_w(self) -> float | None:
-        """Read register 10058 (charger rated power) and return watts, or None if unavailable/invalid.
+    async def read_max_grid_power_w(self) -> float | None:
+        """Read register 10039 (maximum grid electricity draw power) and return watts, or None if unavailable/invalid.
 
         On demand only (never part of the per-cycle read). The caller owns warning logs.
         """
         if not self.connected:
             return None
         try:
-            resp = await self._client.read_holding_registers(address=_REG_RATED_POWER, count=1, device_id=_SLAVE_ID)
+            resp = await self._client.read_holding_registers(address=_REG_MAX_GRID_POWER, count=1, device_id=_SLAVE_ID)
             if resp.isError():
-                raise ModbusException(f"Rated power read error: {resp}")
-            return decode_rated_power_w(resp.registers[0])
+                raise ModbusException(f"Max grid power read error: {resp}")
+            return decode_max_grid_power_w(resp.registers[0])
         except (ModbusException, OSError) as exc:
-            logger.debug("Failed to read charger rated power: %s", exc)
+            logger.debug("Failed to read charger max grid power: %s", exc)
             return None
 
     async def read_single_phase_switching(self) -> SinglePhaseSwitching | None:

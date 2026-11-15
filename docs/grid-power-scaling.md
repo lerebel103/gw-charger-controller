@@ -251,11 +251,11 @@ All in `tests/unit/test_breaker_protection.py` unless a file is named. Fixtures:
 
 Writing charger register 10039, per-phase EV control (the charger takes one total), and predicting house load.
 
-## Charger rated power cap
+## Charger max power cap
 
 The upstream setpoint (Manual, Eco night, Eco grid fallback and the Eco day ramp state) is capped to the charger's
-rated power before it reaches the limiter. The rating comes from read-only register 10058 (0 = 7 kW, 1 = 11 kW,
-2 = 22 kW), read on demand at each Idle -> Charging transition and after each EV (re)connect, never per cycle and
-never in Standby. If the read fails or returns an unknown code the cap is 22 kW. The limiter's own 22 kW ceiling is
-unchanged and it can only lower the setpoint, so it never raises it above the rated power. The 4400 W floor still
+configured max power before it reaches the limiter. The value comes from register 10039 ("Maximum Grid Electricity
+Draw Power", watts = raw x 100, valid 1.4-22 kW), read on demand at each Idle -> Charging transition and after each EV (re)connect, never per cycle and
+never in Standby. If the read fails or is out of range the last good value is kept, else the cap is 22 kW. The limiter's own 22 kW ceiling is
+unchanged and it can only lower the setpoint, so it never raises it above the configured max power. The 4400 W floor still
 applies unless the cap is below it. The limiter still does not write register 10039.

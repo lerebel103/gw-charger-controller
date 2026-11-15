@@ -21,9 +21,9 @@ def clamp(value: float, min_val: float, max_val: float) -> float:
 
 
 def charger_max_w(loop: SamplingLoopProtocol) -> float:
-    """Effective maximum charge power: the charger's rated power if known, never above _MAX_CHARGE_W."""
-    rated = loop._state.ev_charger_max_power_w
-    return _MAX_CHARGE_W if rated is None else min(rated, _MAX_CHARGE_W)
+    """Effective maximum charge power: the charger's max power (register 10039) if known, never above _MAX_CHARGE_W."""
+    configured = loop._state.ev_charger_max_power_w
+    return _MAX_CHARGE_W if configured is None else min(configured, _MAX_CHARGE_W)
 
 
 def clamp_charge_w(value: float, loop: SamplingLoopProtocol) -> float:

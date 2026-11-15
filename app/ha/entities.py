@@ -130,6 +130,7 @@ ENTITIES: list[dict[str, Any]] = [
     _sensor("ev_charger_power", "EV Charger Power", "power", "W", "power", "measurement"),
     _sensor("ev_charger_session_energy", "Session Energy", "session_energy", "Wh", "energy", "total_increasing"),
     _sensor("ev_charger_total_energy", "EV Charger Total Energy", "total_energy", "Wh", "energy", "total_increasing"),
+    _sensor("ev_charger_max_power", "Charger Max Power", "max_power", "W", "power", None, "diagnostic"),
     _sensor("ev_charger_voltage_l1", "EV Voltage L1", "voltage_l1", "V", "voltage", "measurement"),
     _sensor("ev_charger_voltage_l2", "EV Voltage L2", "voltage_l2", "V", "voltage", "measurement"),
     _sensor("ev_charger_voltage_l3", "EV Voltage L3", "voltage_l3", "V", "voltage", "measurement"),

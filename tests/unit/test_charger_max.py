@@ -1,4 +1,4 @@
-"""Charger rated-power cap (register 10058): decode, on-demand reads, fallback, cap in every mode, no ramp windup."""
+"""Charger max-power cap (register 10039): decode, on-demand reads, fallback, cap in every mode, no ramp windup."""
 
 from __future__ import annotations
 
@@ -10,8 +10,9 @@ import pytest
 from app.control.constants import _MAX_CHARGE_W, _MIN_CHARGE_W
 from app.control.mode_strategies import compute_setpoint, setpoint_eco_day, setpoint_eco_night
 from app.control.power_utils import charger_max_w, clamp_charge_w
+from app.control.snapshot import build_snapshot
 from app.modbus import EVChargerModbusClient
-from app.modbus.ev import decode_rated_power_w
+from app.modbus.ev import decode_max_grid_power_w
 from app.state import AppState, ChargeSessionState
 from tests.unit.eco_replay_harness import IgnoringCar, constant_site, run_scenario, surplus_site, user_state
 from tests.unit.helpers import fill_battery_samples, fill_grid_samples, make_control_loop
@@ -27,9 +28,12 @@ def _resp(registers, *, error=False):
 # --------------------------------------------------------------------------------------------------
 # Decode and read
 # --------------------------------------------------------------------------------------------------
-@pytest.mark.parametrize(("raw", "watts"), [(0, 7000.0), (1, 11000.0), (2, 22000.0), (3, None), (0xFFFF, None)])
-def test_decode_rated_power(raw, watts):
-    assert decode_rated_power_w(raw) == watts
+@pytest.mark.parametrize(
+    ("raw", "watts"),
+    [(110, 11000.0), (70, 7000.0), (220, 22000.0), (14, 1400.0), (13, None), (221, None), (0, None), (0xFFFF, None)],
+)
+def test_decode_max_grid_power(raw, watts):
+    assert decode_max_grid_power_w(raw) == watts
 
 
 def _client(read):
@@ -41,22 +45,22 @@ def _client(read):
     return ec, mc
 
 
-async def test_read_rated_power_reads_10058_fc03_count1():
-    ec, mc = _client(AsyncMock(return_value=_resp([1])))
-    assert await ec.read_rated_power_w() == 11000.0
-    mc.read_holding_registers.assert_awaited_once_with(address=10058, count=1, device_id=247)
+async def test_read_max_grid_power_reads_10039_fc03_count1():
+    ec, mc = _client(AsyncMock(return_value=_resp([110])))
+    assert await ec.read_max_grid_power_w() == 11000.0
+    mc.read_holding_registers.assert_awaited_once_with(address=10039, count=1, device_id=247)
 
 
-async def test_read_rated_power_error_and_exception_give_none():
+async def test_read_max_grid_power_error_and_exception_give_none():
     ec, _ = _client(AsyncMock(return_value=_resp([], error=True)))
-    assert await ec.read_rated_power_w() is None
+    assert await ec.read_max_grid_power_w() is None
     ec, _ = _client(AsyncMock(side_effect=OSError("boom")))
-    assert await ec.read_rated_power_w() is None
+    assert await ec.read_max_grid_power_w() is None
 
 
-async def test_read_rated_power_disconnected_gives_none():
+async def test_read_max_grid_power_disconnected_gives_none():
     ec = EVChargerModbusClient(AppState())
-    assert await ec.read_rated_power_w() is None
+    assert await ec.read_max_grid_power_w() is None
 
 
 async def test_connection_epoch_increments_on_connect(monkeypatch):
@@ -167,7 +171,7 @@ async def test_session_start_reads_once_logs_info_and_caps(monkeypatch, caplog):
         charger_max_w=11000.0,
     )
     # one read after connect (epoch change) and one at the Idle -> Charging transition
-    assert result.ev.read_rated_power_w.await_count == 2
+    assert result.ev.read_max_grid_power_w.await_count == 2
     assert any("Charger configured max power: 11000 W" in r.getMessage() for r in caplog.records)
     assert result.state.ev_charger_max_power_w == 11000.0
     assert max(w for _, w in result.writes) == 11000.0
@@ -177,7 +181,7 @@ async def test_no_per_cycle_reads(monkeypatch):
     result = await run_scenario(
         monkeypatch, n_cycles=200, site=constant_site(), state=_manual_state(), charger_max_w=11000.0
     )
-    assert result.ev.read_rated_power_w.await_count == 1  # connect only; session already charging
+    assert result.ev.read_max_grid_power_w.await_count == 1  # connect only; session already charging
     assert max(w for _, w in result.writes) == 11000.0
 
 
@@ -191,8 +195,10 @@ async def test_no_read_in_standby(monkeypatch):
         eco_charging=False,
         charger_max_w=11000.0,
     )
-    assert result.ev.read_rated_power_w.await_count == 0
+    assert result.ev.read_max_grid_power_w.await_count == 0
     assert result.state.ev_charger_max_power_w is None
+    result.state.ev_comm_healthy = False  # the real client disconnect in Standby does this
+    assert build_snapshot(result.loop).ev_charger_max_power_w is None
 
 
 async def test_standby_exit_reads_after_reconnect(monkeypatch):
@@ -212,7 +218,7 @@ async def test_standby_exit_reads_after_reconnect(monkeypatch):
         charger_max_w=11000.0,
         on_cycle=on_cycle,
     )
-    assert result.ev.read_rated_power_w.await_count >= 1
+    assert result.ev.read_max_grid_power_w.await_count >= 1
     assert result.state.ev_charger_max_power_w == 11000.0
 
 
@@ -223,10 +229,10 @@ async def test_read_failure_falls_back_to_22kw_warns_once(monkeypatch, caplog, f
     def install(i, st, loop):
         if i == 0:  # the harness installs no read mock when charger_max_w is None
             loop._ev_client.connection_epoch = 1
-            loop._ev_client.read_rated_power_w = failure
+            loop._ev_client.read_max_grid_power_w = failure
 
     result = await run_scenario(monkeypatch, n_cycles=60, site=constant_site(), state=_manual_state(), on_cycle=install)
-    warnings = [r for r in caplog.records if "rated power" in r.getMessage() and r.levelno == logging.WARNING]
+    warnings = [r for r in caplog.records if "max power" in r.getMessage() and r.levelno == logging.WARNING]
     assert len(warnings) == 1
     assert result.state.ev_charger_max_power_w is None
     assert charger_max_w(result.loop) == _MAX_CHARGE_W
@@ -236,7 +242,7 @@ async def test_read_failure_falls_back_to_22kw_warns_once(monkeypatch, caplog, f
 async def test_last_good_value_kept_on_later_failure(monkeypatch):
     def on_cycle(i, state, loop):
         if i == 10:
-            loop._ev_client.read_rated_power_w = AsyncMock(return_value=None)
+            loop._ev_client.read_max_grid_power_w = AsyncMock(return_value=None)
             loop._ev_client.connection_epoch = 2
 
     result = await run_scenario(
@@ -269,3 +275,30 @@ async def test_eco_ramp_capped_in_loop_and_ramp_down_unchanged(monkeypatch):
     assert result.records[399].ramp_w == 11000.0
     # surplus gone: the ramp leaves the cap on the first step down, never lingers above it
     assert result.records[-1].ramp_w < 11000.0
+
+
+@pytest.mark.parametrize("bad", [500.0, 40000.0])
+async def test_out_of_range_value_falls_back_and_warns_once(monkeypatch, caplog, bad):
+    caplog.set_level(logging.INFO)
+    result = await run_scenario(
+        monkeypatch, n_cycles=60, site=constant_site(), state=_manual_state(), charger_max_w=bad
+    )
+    warnings = [r for r in caplog.records if "max power" in r.getMessage() and r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert result.state.ev_charger_max_power_w is None
+    assert charger_max_w(result.loop) == _MAX_CHARGE_W
+
+
+async def test_session_start_info_log_names_register_10039(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    await run_scenario(
+        monkeypatch,
+        n_cycles=6,
+        site=constant_site(),
+        state=_manual_state(),
+        session=ChargeSessionState.IDLE,
+        eco_charging=False,
+        ramp_w=_MIN_CHARGE_W,
+        charger_max_w=11000.0,
+    )
+    assert any("Charger configured max power: 11000 W (register 10039)" in r.getMessage() for r in caplog.records)

@@ -81,6 +81,7 @@ _MASKED_SNAPSHOT_FIELDS = [
     "ev_current_c",
     "ev_completion_time_h",
     "ev_total_energy_wh",
+    "ev_charger_max_power_w",
     "l1_voltage_drop_pct",
     "l2_voltage_drop_pct",
     "l3_voltage_drop_pct",
@@ -153,3 +154,15 @@ class TestBuildSnapshotEVCommsHealthy:
         assert snapshot.ev_charger_status_display == ChargerStatus.CHARGING_IN_PROGRESS.display_name
         assert snapshot.ev_comm_wifi_router_connected is True
         assert snapshot.ev_soc_pct == 42.0
+
+
+class TestChargerMaxPowerField:
+    def test_shows_cached_cap_when_healthy(self):
+        state = AppState(ev_charger_max_power_w=11000.0)
+        state.ev_comm_healthy = True
+        assert build_snapshot(_loop(state)).ev_charger_max_power_w == 11000.0
+
+    def test_shows_22kw_fallback_without_cache(self):
+        state = AppState()
+        state.ev_comm_healthy = True
+        assert build_snapshot(_loop(state)).ev_charger_max_power_w == 22000.0

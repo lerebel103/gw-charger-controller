@@ -84,22 +84,22 @@ class ControlLoop:
             await self._ev_client.stop_charging()
 
     async def _refresh_charger_max(self) -> None:
-        """Read the charger rated power (register 10058) on demand and cache it. Never raises, never in Standby."""
+        """Read the charger max power (register 10039) on demand and cache it. Never raises, never in Standby."""
         if self._state.charge_mode == "Standby" or self._standby_write_quiet or not self._ev_client.connected:
             return
         try:
-            value = await self._ev_client.read_rated_power_w()
+            value = await self._ev_client.read_max_grid_power_w()
         except Exception:  # noqa: BLE001 - the control loop must survive any read failure
-            logger.debug("Charger rated power read raised", exc_info=True)
+            logger.debug("Charger max power read raised", exc_info=True)
             value = None
-        if isinstance(value, float) and 7000.0 <= value <= _MAX_CHARGE_W:
+        if isinstance(value, float) and 1400.0 <= value <= _MAX_CHARGE_W:
             self._state.ev_charger_max_power_w = min(value, _MAX_CHARGE_W)
             self._charger_max_warned = False
             return
         if not self._charger_max_warned:
             self._charger_max_warned = True
             logger.warning(
-                "Could not read charger rated power (register 10058); using %.0f W",
+                "Could not read charger max power (register 10039); using %.0f W",
                 charger_max_w(self),
             )
 
@@ -158,7 +158,7 @@ class ControlLoop:
                 self._charger_max_warned = False
                 await self._refresh_charger_max()
                 cap = charger_max_w(self)
-                logger.info("Charger configured max power: %.0f W (register 10058)", cap)
+                logger.info("Charger configured max power: %.0f W (register 10039)", cap)
                 setpoint = min(setpoint, cap)
                 self._eco_day_setpoint_w = min(self._eco_day_setpoint_w, cap)
             requested = setpoint

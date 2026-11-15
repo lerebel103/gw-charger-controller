@@ -115,7 +115,7 @@ See [AGENTS.md](AGENTS.md) for architecture details and module responsibilities.
 
 ## Hardware
 
-- **EV Charger**: GoodWe GW22K-HCA-20 (Modbus TCP, slave ID 247, setpoint range 4.4–22 kW; every setpoint is capped to the rated power read from register 10058, on demand at each charging session start and after each (re)connect, never per cycle and never in Standby; if it cannot be read, 22 kW is used and a warning is logged once)
+- **EV Charger**: GoodWe GW22K-HCA-20 (Modbus TCP, slave ID 247, setpoint range 4.4–22 kW; every setpoint is capped to the charger's configured max power (register 10039, "Maximum Grid Electricity Draw Power", also shown as the "Charger Max Power" diagnostic sensor), read on demand at each charging session start and after each (re)connect, never per cycle and never in Standby; if it cannot be read, 22 kW is used and a warning is logged once)
 - **Energy System**: Victron GX (Modbus TCP, unit ID 100 for system, configurable for grid meter)
 
 ## License

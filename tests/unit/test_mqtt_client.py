@@ -382,6 +382,7 @@ _NUMERIC_STATE_TOPICS = [
     "ev_charger/sensor/power/state",
     "ev_charger/sensor/session_energy/state",
     "ev_charger/sensor/total_energy/state",
+    "ev_charger/sensor/max_power/state",
     "ev_charger/sensor/voltage_l1/state",
     "ev_charger/sensor/voltage_l2/state",
     "ev_charger/sensor/voltage_l3/state",
@@ -432,6 +433,36 @@ class TestMQTTDiscovery:
                 assert payload["expire_after"] == SENSOR_EXPIRE_AFTER
             else:
                 assert "expire_after" not in payload
+
+
+class TestChargerMaxPowerSensor:
+    @pytest.mark.asyncio
+    async def test_discovery_payload(self):
+        client = MQTTClient(state=AppState(), config_manager=MagicMock(), publish_queue=asyncio.Queue())
+        client._client = AsyncMock()
+        await client._publish_discovery()
+        payloads = [
+            json.loads(c.args[1])
+            for c in client._client.publish.await_args_list
+            if str(c.args[0]).startswith("homeassistant/sensor/") and c.args[1]
+        ]
+        sensor = next(p for p in payloads if p["unique_id"] == "ev_charger_max_power")
+        assert sensor["name"] == "Charger Max Power"
+        assert sensor["unit_of_measurement"] == "W"
+        assert sensor["device_class"] == "power"
+        assert sensor["entity_category"] == "diagnostic"
+        assert "state_class" not in sensor
+        assert sensor["state_topic"] == "ev_charger/sensor/max_power/state"
+
+    @pytest.mark.asyncio
+    async def test_state_published_and_skipped_when_none(self):
+        client = MQTTClient(state=AppState(), config_manager=MagicMock(), publish_queue=asyncio.Queue())
+        client._client = AsyncMock()
+        await client._publish_state(StateSnapshot(ev_charger_max_power_w=11000.0))
+        assert _published(client._client)["ev_charger/sensor/max_power/state"] == "11000.0"
+        client._client = AsyncMock()
+        await client._publish_state(StateSnapshot(ev_charger_max_power_w=None))
+        assert "ev_charger/sensor/max_power/state" not in _published(client._client)
 
 
 class TestMQTTPublishStateTransientErrors:

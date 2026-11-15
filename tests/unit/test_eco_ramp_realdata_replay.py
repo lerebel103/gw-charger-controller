@@ -186,11 +186,11 @@ async def test_r1_csv1_min_charge_is_floor_ramp_rises_above_4400(monkeypatch):
 # R2: CSV 2, min charge OFF: must climb past the old 4910 W pin, +40 W every cycle
 # --------------------------------------------------------------------------------------------------
 async def test_r5_csv1_cap_11000_never_exceeded(monkeypatch):
-    """Charger rated 11 kW (register 10058 = 1): the setpoint, the written value and the ramp state stay <= 11000 W."""
+    """Charger max 11 kW (register 10039 = 110): setpoint, written value and ramp state stay <= 11000 W."""
     result, rows = await _csv1(monkeypatch, charger_max_w=11000.0)
     recs = _connected(result, rows)
     assert result.state.ev_charger_max_power_w == 11000.0
-    assert result.ev.read_rated_power_w.await_count >= 1
+    assert result.ev.read_max_grid_power_w.await_count >= 1
     assert all(r.commanded_w <= 11000.0 for r in result.records)
     assert all(r.written_w <= 11000.0 for r in result.records if r.written_w is not None)
     assert all(w <= 11000.0 for _, w in result.writes)

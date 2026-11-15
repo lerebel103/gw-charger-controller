@@ -3,7 +3,7 @@
 import time as _time
 from datetime import datetime
 
-from app.control.power_utils import get_ev_soc
+from app.control.power_utils import charger_max_w, get_ev_soc
 from app.control.protocols import SnapshotLoopProtocol
 from app.state import StateSnapshot
 
@@ -54,6 +54,7 @@ def build_snapshot(loop: SnapshotLoopProtocol) -> StateSnapshot:
         ev_current_c=loop._state.ev_current_c if ev_ok else None,
         ev_completion_time_h=loop._state.ev_completion_time_h if ev_ok else None,
         ev_total_energy_wh=loop._state.ev_total_energy_wh if ev_ok else None,
+        ev_charger_max_power_w=charger_max_w(loop) if ev_ok else None,
         ev_soc_pct=get_ev_soc(loop),
         l1_voltage_drop_pct=loop._state.l1_voltage_drop_pct if ev_ok else None,
         l2_voltage_drop_pct=loop._state.l2_voltage_drop_pct if ev_ok else None,

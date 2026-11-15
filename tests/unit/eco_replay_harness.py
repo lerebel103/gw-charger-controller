@@ -286,7 +286,7 @@ async def run_scenario(
 
     ``car`` models the EV (closed loop); ``ev_fields(i, state)`` instead feeds recorded EV values (open loop).
     ``night`` selects the Eco night (discharge) window instead of Eco day.
-    ``charger_max_w`` makes the mocked charger report that rated power (register 10058); None means no cap read.
+    ``charger_max_w`` makes the mocked charger report that max power (register 10039); None means no cap read.
     ``cycle_s`` is the fake-clock advance per cycle (the real loop period is the interval plus Modbus time).
     """
     clock = FakeClock()
@@ -323,7 +323,7 @@ async def run_scenario(
     ev.connected = True
     if charger_max_w is not None:
         ev.connection_epoch = 1
-        ev.read_rated_power_w = AsyncMock(return_value=charger_max_w)
+        ev.read_max_grid_power_w = AsyncMock(return_value=charger_max_w)
     ev.ensure_connected = AsyncMock()
 
     async def ev_read():
