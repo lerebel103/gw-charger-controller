@@ -198,7 +198,7 @@ async def test_no_read_in_standby(monkeypatch):
     assert result.ev.read_max_grid_power_w.await_count == 0
     assert result.state.ev_charger_max_power_w is None
     result.state.ev_comm_healthy = False  # the real client disconnect in Standby does this
-    assert build_snapshot(result.loop).ev_charger_max_power_w is None
+    assert build_snapshot(result.loop).ev_max_grid_power_draw_w is None
 
 
 async def test_standby_exit_reads_after_reconnect(monkeypatch):
@@ -302,3 +302,11 @@ async def test_session_start_info_log_names_register_10039(monkeypatch, caplog):
         charger_max_w=11000.0,
     )
     assert any("Charger configured max power: 11000 W (register 10039)" in r.getMessage() for r in caplog.records)
+
+
+def test_cap_follows_cache_updated_by_ha_write():
+    state = AppState(ev_connected=True, charge_mode="Manual", manual_power_w=11000.0, ev_charger_max_power_w=11000.0)
+    cl = make_control_loop(state)
+    assert compute_setpoint(cl) == 11000.0
+    state.ev_charger_max_power_w = 7000.0  # as set by the HA number after a confirmed read-back
+    assert compute_setpoint(cl) == 7000.0

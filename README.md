@@ -82,7 +82,7 @@ All other settings (charge mode, thresholds, timings, breaker limit) are configu
 The controller auto-discovers in HA via MQTT — no manual YAML needed. You get:
 
 - **Sensors**: charger power, per-phase voltage/current, grid current, breaker headroom %, EV SOC, session energy, total energy, voltage drop, uptime
-- **Controls**: charge mode select, manual power slider, EV SOC targets, breaker limit, discharge window times, all eco thresholds
+- **Controls**: charge mode select, manual power slider, EV SOC targets, breaker limit, Max Grid Power Draw (register 10039, 1.4-22 kW in 100 W steps, also the setpoint cap; settable in Standby through a short on-demand session), discharge window times, all eco thresholds
 - **Diagnostics**: charger status, communication link states, serial number
 - **Events**: charging started/stopping/stopped with reason and energy totals
 
@@ -115,7 +115,7 @@ See [AGENTS.md](AGENTS.md) for architecture details and module responsibilities.
 
 ## Hardware
 
-- **EV Charger**: GoodWe GW22K-HCA-20 (Modbus TCP, slave ID 247, setpoint range 4.4–22 kW; every setpoint is capped to the charger's configured max power (register 10039, "Maximum Grid Electricity Draw Power", also shown as the "Charger Max Power" diagnostic sensor), read on demand at each charging session start and after each (re)connect, never per cycle and never in Standby; if it cannot be read, 22 kW is used and a warning is logged once)
+- **EV Charger**: GoodWe GW22K-HCA-20 (Modbus TCP, slave ID 247, setpoint range 4.4–22 kW; every setpoint is capped to the charger's configured max power (register 10039, "Maximum Grid Electricity Draw Power", editable in HA as the "Max Grid Power Draw" number), read on demand at each charging session start and after each (re)connect, never per cycle and never in Standby; if it cannot be read, 22 kW is used and a warning is logged once)
 - **Energy System**: Victron GX (Modbus TCP, unit ID 100 for system, configurable for grid meter)
 
 ## License

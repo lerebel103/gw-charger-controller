@@ -23,7 +23,7 @@ SENSOR_EXPIRE_AFTER = 300
 DEPRECATED_DISCOVERY_TOPICS = [
     "homeassistant/select/ev_charger_plug_and_charge_auto_start/config",
     "homeassistant/number/ev_charger_max_charging_power/config",
-    "homeassistant/number/ev_charger_max_grid_power_draw/config",
+    "homeassistant/sensor/ev_charger_max_power/config",
 ]
 
 # Maps command_topic -> (state_attr, value_type)
@@ -55,6 +55,7 @@ COMMAND_MAP: dict[str, tuple[str, str]] = {
     f"{PREFIX}/number/eco_day_ramp_step/set": ("eco_day_ramp_step_w", "float"),
     f"{PREFIX}/number/measurement_correction/set": ("correction_pct", "float"),
     f"{PREFIX}/number/grid_breaker_limit/set": ("grid_breaker_limit_a", "float"),
+    f"{PREFIX}/number/max_grid_power_draw/set": ("ev_max_grid_power_draw", "float"),
     f"{PREFIX}/text/solar_battery_discharge_start/set": ("solar_battery_discharge_start", "hhmm"),
     f"{PREFIX}/text/solar_battery_discharge_end/set": ("solar_battery_discharge_end", "hhmm"),
     f"{PREFIX}/text/ev_charger_ip/set": ("ev_charger_ip", "str"),
@@ -94,6 +95,7 @@ RUNTIME_EV_COMMAND_FIELDS = {
     "ev_advanced_charging_mode",
     "ev_plug_and_charge_auto_start",
     "ev_single_phase_switching",
+    "ev_max_grid_power_draw",
 }
 
 EV_RECONNECT_FIELDS = {"ev_charger_ip", "ev_charger_port"}

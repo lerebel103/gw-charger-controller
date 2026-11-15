@@ -355,10 +355,34 @@ class EVChargerModbusClient:
             logger.warning("Failed to read plug-and-charge auto start: %s", exc)
             return None
 
+    async def write_max_grid_power_w(self, power_w: float) -> bool:
+        """Write register 10039 (maximum grid electricity draw power) from watts (raw = W / 100).
+
+        The caller updates cached state after reading the value back.
+        """
+        if not self.connected:
+            return False
+        raw = round(power_w / 100)
+        if not (_RAW_MAX_GRID_POWER_MIN <= raw <= _RAW_MAX_GRID_POWER_MAX):
+            logger.warning("Refusing to write max grid power draw: %.0f W is out of range", power_w)
+            return False
+        try:
+            resp = await self._client.write_register(address=_REG_MAX_GRID_POWER, value=raw, device_id=_SLAVE_ID)
+            if resp.isError():
+                raise ModbusException(f"Max grid power write error: {resp}")
+            logger.info(
+                "Wrote max grid power draw: register %d <- raw=%d (%.0f W)", _REG_MAX_GRID_POWER, raw, raw * 100.0
+            )
+            return True
+        except (ModbusException, OSError) as exc:
+            logger.warning("Failed to write max grid power draw: %s", exc)
+            return False
+
     async def read_max_grid_power_w(self) -> float | None:
         """Read register 10039 (maximum grid electricity draw power) and return watts, or None if unavailable/invalid.
 
-        On demand only (never part of the per-cycle read). The caller owns warning logs.
+        On demand only (after EV connect, at session start, read-back after a write); never per cycle.
+        The caller owns warning logs.
         """
         if not self.connected:
             return None

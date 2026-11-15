@@ -249,7 +249,7 @@ All in `tests/unit/test_breaker_protection.py` unless a file is named. Fixtures:
 
 ## 12. Out of scope
 
-Writing charger register 10039, per-phase EV control (the charger takes one total), and predicting house load.
+Writing charger register 10039 from the limiter (only the HA number writes it), per-phase EV control (the charger takes one total), and predicting house load.
 
 ## Charger max power cap
 
@@ -258,4 +258,6 @@ configured max power before it reaches the limiter. The value comes from registe
 Draw Power", watts = raw x 100, valid 1.4-22 kW), read on demand at each Idle -> Charging transition and after each EV (re)connect, never per cycle and
 never in Standby. If the read fails or is out of range the last good value is kept, else the cap is 22 kW. The limiter's own 22 kW ceiling is
 unchanged and it can only lower the setpoint, so it never raises it above the configured max power. The 4400 W floor still
-applies unless the cap is below it. The limiter still does not write register 10039.
+applies unless the cap is below it. The limiter never writes register 10039; only the HA "Max Grid Power Draw" number does. That number writes on
+demand, reads the register back, and on confirmation updates the cached cap at once (in Standby through a short
+connect, write, read-back, disconnect session).

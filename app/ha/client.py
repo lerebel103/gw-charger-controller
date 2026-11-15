@@ -57,6 +57,9 @@ from app.ha.parsers import (
     parse_advanced_mode_payload as _parse_advanced_mode_payload,
 )
 from app.ha.parsers import (
+    parse_max_grid_power_draw_payload as _parse_max_grid_power_draw_payload,
+)
+from app.ha.parsers import (
     parse_plug_and_charge_payload as _parse_plug_and_charge_payload,
 )
 from app.ha.parsers import (
@@ -194,7 +197,6 @@ class MQTTClient:
         await _pub_if(f"{_PREFIX}/sensor/power/state", _fmt(snapshot.ev_active_power_w))
         await _pub_if(f"{_PREFIX}/sensor/session_energy/state", _fmt(snapshot.ev_session_energy_wh))
         await _pub_if(f"{_PREFIX}/sensor/total_energy/state", _fmt(snapshot.ev_total_energy_wh))
-        await _pub_if(f"{_PREFIX}/sensor/max_power/state", _fmt(snapshot.ev_charger_max_power_w))
         await _pub_if(f"{_PREFIX}/sensor/voltage_l1/state", _fmt(snapshot.ev_voltage_l1_v))
         await _pub_if(f"{_PREFIX}/sensor/voltage_l2/state", _fmt(snapshot.ev_voltage_l2_v))
         await _pub_if(f"{_PREFIX}/sensor/voltage_l3/state", _fmt(snapshot.ev_voltage_l3_v))
@@ -212,6 +214,9 @@ class MQTTClient:
         await _pub_if(f"{_PREFIX}/sensor/grid_current_l2/state", _fmt(snapshot.victron_l2_current_a))
         await _pub_if(f"{_PREFIX}/sensor/grid_current_l3/state", _fmt(snapshot.victron_l3_current_a))
         await _pub_if(f"{_PREFIX}/sensor/completion_time/state", _fmt(snapshot.ev_completion_time_h))
+        await _pub_if(
+            f"{_PREFIX}/number/max_grid_power_draw/state", _fmt(snapshot.ev_max_grid_power_draw_w), retain=True
+        )
         await _pub_if(f"{_PREFIX}/sensor/ev_soc/state", _fmt(snapshot.ev_soc_pct))
         await _pub_if(f"{_PREFIX}/sensor/status/state", _fmt(snapshot.ev_charger_status_display))
         await _pub_if(
@@ -335,6 +340,8 @@ class MQTTClient:
             pairs.append((f"{_PREFIX}/switch/single_phase_switching/state", "ON"))
         elif s.ev_single_phase_switching_enum == SinglePhaseSwitching.DISABLED:
             pairs.append((f"{_PREFIX}/switch/single_phase_switching/state", "OFF"))
+        if s.ev_charger_max_power_w is not None:
+            pairs.append((f"{_PREFIX}/number/max_grid_power_draw/state", str(s.ev_charger_max_power_w)))
 
         for topic, value in pairs:
             await self._client.publish(topic, value, retain=True)
@@ -482,6 +489,7 @@ class MQTTClient:
             return
 
         enum_value: AdvancedChargingMode | PlugAndChargeAutoStart | SinglePhaseSwitching | None = None
+        power_w: float | None = None
 
         if attr == "ev_advanced_charging_mode":
             enum_value = _parse_advanced_mode_payload(payload)
@@ -510,6 +518,19 @@ class MQTTClient:
                 return
             writer = self._ev_client.write_single_phase_switching
             reader = self._ev_client.read_single_phase_switching
+        elif attr == "ev_max_grid_power_draw":
+            power_w = _parse_max_grid_power_draw_payload(payload)
+            if power_w is None:
+                logger.warning("Invalid max grid power draw value '%s' (expected 1400-22000 W)", payload)
+                cached = self._state.ev_charger_max_power_w
+                state_topic = _CMD_TO_STATE_TOPIC.get(topic)
+                if cached is not None and state_topic and self._client is not None:
+                    await self._client.publish(state_topic, str(cached), retain=True)
+                return
+            if self._state.ev_charger_max_power_w == power_w:
+                return
+            writer = self._ev_client.write_max_grid_power_w
+            reader = self._ev_client.read_max_grid_power_w
         else:
             logger.warning("Unsupported runtime EV select field: %s", attr)
             return
@@ -522,7 +543,7 @@ class MQTTClient:
             return
 
         try:
-            ok = await writer(enum_value)
+            ok = await writer(power_w if attr == "ev_max_grid_power_draw" else enum_value)
             if not ok:
                 return
             confirmed = await reader()
@@ -540,6 +561,14 @@ class MQTTClient:
                     state_value = "ON"
                 elif confirmed == PlugAndChargeAutoStart.OFF:
                     state_value = "OFF"
+            elif attr == "ev_max_grid_power_draw":
+                if confirmed is not None:
+                    self._state.ev_charger_max_power_w = confirmed
+                    state_value = str(confirmed)
+                    if confirmed != power_w:
+                        logger.warning(
+                            "Max grid power draw read back %.0f W after writing %.0f W", confirmed, power_w or 0.0
+                        )
             elif confirmed is not None:
                 state_value = confirmed.display_name
 

@@ -580,6 +580,42 @@ class TestEVChargerModbusClient:
         mock_client.write_register.assert_called_once_with(address=10023, value=1, device_id=247)
         assert state.ev_single_phase_switching_enum == SinglePhaseSwitching.ENABLED
 
+    @pytest.mark.asyncio
+    async def test_write_max_grid_power_w_writes_scaled_raw_to_10039(self):
+        ec = EVChargerModbusClient(self._make_state())
+        mock_client = AsyncMock()
+        mock_client.connected = True
+        mock_client.write_register = AsyncMock(return_value=_make_response([]))
+        ec._client = mock_client
+        assert await ec.write_max_grid_power_w(11000.0) is True
+        mock_client.write_register.assert_called_once_with(address=10039, value=110, device_id=247)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("watts", [1300.0, 22100.0])
+    async def test_write_max_grid_power_w_out_of_range_not_written(self, watts):
+        ec = EVChargerModbusClient(self._make_state())
+        mock_client = AsyncMock()
+        mock_client.connected = True
+        ec._client = mock_client
+        assert await ec.write_max_grid_power_w(watts) is False
+        mock_client.write_register.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_write_max_grid_power_w_not_connected(self):
+        ec = EVChargerModbusClient(self._make_state())
+        assert await ec.write_max_grid_power_w(11000.0) is False
+
+    @pytest.mark.asyncio
+    async def test_write_max_grid_power_w_error_response_and_exception(self):
+        ec = EVChargerModbusClient(self._make_state())
+        mock_client = AsyncMock()
+        mock_client.connected = True
+        mock_client.write_register = AsyncMock(return_value=_make_response([], is_error=True))
+        ec._client = mock_client
+        assert await ec.write_max_grid_power_w(11000.0) is False
+        mock_client.write_register = AsyncMock(side_effect=OSError("boom"))
+        assert await ec.write_max_grid_power_w(11000.0) is False
+
     # --- reconnect ---
 
     @pytest.mark.asyncio
