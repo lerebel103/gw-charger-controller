@@ -9,7 +9,7 @@ Signs and units used across the app. Verified against the code and live data; do
 - **EV power and current**
   - Register 10015 has 0.1 kW resolution (U16, gain 10), so it moves in 100 W steps and reads about 10 % low on single-phase sessions.
   - The three phase currents are multiplied by the correction factor `1 + correction_pct / 100` (capped at 10 %, currently 5.6 %). Voltages are not corrected.
-  - `sensor.ev_charger_power` (`ev_active_power_w`, name "Charge Power (computed)") is the sum over phases of V x corrected I. Do not apply the factor again. It matches real power to about 3 % RMS for both the 1-phase and 3-phase cars.
+  - `sensor.ev_charger_power` (`ev_active_power_w`, name "Charge Power (computed)") is the sum over phases of V x corrected I. Do not apply the factor again. It matches real power to about 3 % RMS for both the 1-phase and 3-phase cars. It is forced to 0 W unless status register 10017 is 3 (charging in progress) and register 10015 is above 0. This removes the 1.5-2.7 A residual phase current the charger reports for one poll when idle and after a stop (history-18, 2026-11-15, 16 events, 0.44 % of idle time). Phase currents, raw currents and the onboard sensor are not affected, and `None` is kept when no phase is valid.
   - "Charge Power (onboard)" is register 10015 x the correction factor (the old behaviour). It is less accurate and kept for comparison.
   - Details: `ev-calibration` skill.
 - **Victron signs for zero-sum analysis**

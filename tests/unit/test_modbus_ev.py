@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.modbus import EVChargerModbusClient
-from app.modbus.ev import compute_ev_power_w
+from app.modbus.ev import compute_ev_power_w, ev_is_actively_charging
 from app.state import AdvancedChargingMode, AppState, ChargerStatus, PlugAndChargeAutoStart, SinglePhaseSwitching
 
 # ---------------------------------------------------------------------------
@@ -779,3 +779,98 @@ class TestComputeEvPowerW:
 
     def test_rounds_to_one_decimal(self):
         assert compute_ev_power_w((230.123, 0.0, 0.0), (1.0, 0.0, 0.0)) == 230.1
+
+
+class TestEvIsActivelyCharging:
+    @pytest.mark.parametrize("status", list(ChargerStatus))
+    def test_only_charging_status_with_positive_register(self, status):
+        assert ev_is_actively_charging(int(status), 110) is (status == ChargerStatus.CHARGING_IN_PROGRESS)
+
+    def test_zero_or_missing_register_is_not_charging(self):
+        assert ev_is_actively_charging(3, 0) is False
+        assert ev_is_actively_charging(3, None) is False
+
+    def test_missing_status_is_not_charging(self):
+        assert ev_is_actively_charging(None, 110) is False
+
+
+class TestEvPowerZeroedWhenIdle:
+    @staticmethod
+    async def _read(status: int, p_reg: int, currents: list[int]) -> AppState:
+        state = AppState(ev_charger_ip="192.168.1.20", ev_charger_port=502)
+        ec = EVChargerModbusClient(state)
+        mock_client = AsyncMock()
+        ec._client = mock_client
+        mock_client.read_holding_registers = AsyncMock(
+            side_effect=[
+                _make_response([2280, 2290, 2270, *currents, p_reg, 0, status]),
+                _make_response([0, 1]),
+                _make_response([0, 0]),
+                _make_response([2]),
+                _make_response([1]),
+                _make_response([2]),
+                _make_response([0]),
+                _make_response([0]),
+            ]
+        )
+        await ec._read_registers()
+        return state
+
+    @pytest.mark.asyncio
+    async def test_idle_with_residual_current_is_zero(self):
+        state = await self._read(1, 0, [0, 20, 0])
+        assert state.ev_active_power_w == 0.0
+        assert state.ev_current_b == pytest.approx(2.0 * 1.056)
+        assert state.ev_current_raw_b == pytest.approx(2.0)
+
+    @pytest.mark.asyncio
+    async def test_charging_status_with_zero_register_is_zero(self):
+        state = await self._read(3, 0, [0, 0, 58])
+        assert state.ev_active_power_w == 0.0
+
+    @pytest.mark.asyncio
+    async def test_completed_with_residual_current_is_zero(self):
+        state = await self._read(4, 0, [0, 20, 0])
+        assert state.ev_active_power_w == 0.0
+
+    @pytest.mark.asyncio
+    async def test_idle_status_with_power_register_is_zero(self):
+        state = await self._read(1, 110, [160, 155, 158])
+        assert state.ev_active_power_w == 0.0
+
+    @pytest.mark.asyncio
+    async def test_start_ramp_poll_is_not_zeroed(self):
+        state = await self._read(3, 6, [36, 0, 4])
+        expected = (228.0 * 3.6 + 227.0 * 0.4) * 1.056
+        assert state.ev_active_power_w == pytest.approx(expected, abs=0.1)
+        assert state.ev_active_power_w > 0
+
+    @pytest.mark.asyncio
+    async def test_charging_three_phase_is_sum_v_times_i(self):
+        state = await self._read(3, 110, [160, 155, 158])
+        expected = (228.0 * 16.0 + 229.0 * 15.5 + 227.0 * 15.8) * 1.056
+        assert state.ev_active_power_w == pytest.approx(expected, abs=0.1)
+
+    @pytest.mark.asyncio
+    async def test_idle_with_no_valid_phase_stays_none(self):
+        state = await self._read(1, 0, [65535, 65535, 410])
+        assert state.ev_active_power_w is None
+
+    @pytest.mark.asyncio
+    async def test_onboard_power_unchanged_when_idle(self):
+        state = await self._read(1, 110, [160, 155, 158])
+        assert state.ev_active_power_onboard_w == pytest.approx(110 / 10 * 1000 * 1.056)
+
+    @pytest.mark.asyncio
+    async def test_failed_read_after_idle_keeps_value(self):
+        from pymodbus.exceptions import ModbusException
+
+        state = AppState(ev_charger_ip="192.168.1.20", ev_charger_port=502)
+        state.ev_active_power_w = 5000.0
+        ec = EVChargerModbusClient(state)
+        mock_client = AsyncMock()
+        ec._client = mock_client
+        mock_client.read_holding_registers = AsyncMock(side_effect=ModbusException("timeout"))
+        with pytest.raises(ModbusException):
+            await ec._read_registers()
+        assert state.ev_active_power_w == 5000.0
