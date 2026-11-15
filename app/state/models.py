@@ -55,6 +55,7 @@ class AppState:
     ev_plug_and_charge_auto_start: int | None = None
     ev_plug_and_charge_auto_start_enum: PlugAndChargeAutoStart | None = None
     ev_charger_setpoint_raw: int | None = None
+    ev_charger_max_power_w: float | None = None  # rated charger power (register 10058); cap for the setpoint
     ev_soc_pct: float | None = None
     ev_soc_pct_updated_at: float | None = None
     ev_comm_healthy: bool = True

@@ -20,6 +20,18 @@ def clamp(value: float, min_val: float, max_val: float) -> float:
     return max(min_val, min(value, max_val))
 
 
+def charger_max_w(loop: SamplingLoopProtocol) -> float:
+    """Effective maximum charge power: the charger's rated power if known, never above _MAX_CHARGE_W."""
+    rated = loop._state.ev_charger_max_power_w
+    return _MAX_CHARGE_W if rated is None else min(rated, _MAX_CHARGE_W)
+
+
+def clamp_charge_w(value: float, loop: SamplingLoopProtocol) -> float:
+    """Clamp to [_MIN_CHARGE_W, charger max]. The cap wins if it is below the floor."""
+    cap = charger_max_w(loop)
+    return clamp(value, min(_MIN_CHARGE_W, cap), cap)
+
+
 def get_ev_soc(loop: SamplingLoopProtocol) -> float | None:
     """Return ev_soc_pct if fresh, else None."""
     state = loop._state
@@ -97,7 +109,7 @@ def compute_grid_fallback_setpoint(loop: SamplingLoopProtocol, ev_soc: float) ->
         required_w,
     )
 
-    return clamp(required_w, _MIN_CHARGE_W, _MAX_CHARGE_W)
+    return clamp_charge_w(required_w, loop)
 
 
 def limit_battery_discharge(loop: SamplingLoopProtocol, setpoint: float, max_discharge_w: float) -> float:
@@ -109,5 +121,5 @@ def limit_battery_discharge(loop: SamplingLoopProtocol, setpoint: float, max_dis
             setpoint -= overshoot
             if setpoint < _MIN_CHARGE_W:
                 return 0.0
-            setpoint = clamp(setpoint, _MIN_CHARGE_W, _MAX_CHARGE_W)
+            setpoint = clamp_charge_w(setpoint, loop)
     return setpoint

@@ -137,18 +137,25 @@ Export never creates headroom and never offsets import on another phase or in ti
 
 ## 5. Eco-day anti-windup
 
-The Eco-day ramp adds 200 W per cycle when the home battery allows. Two guards stop it running away:
+The Eco-day ramp adds one `eco_day_ramp_step_w` per cycle while the instantaneous battery power is above -200 W. It
+is driven only by site signals (grid, battery, battery SOC) and never reads EV power or current: the setpoint is a
+desired value, and the car may step current in whole amps, lag, cap itself or ignore it. The v0.1.13 "EV is following"
+guard (setpoint limited to the car's draw plus 500 W) was removed because it deadlocked against the car's whole-amp
+steps and stalled the ramp. The ramp is bounded by:
 
+- the floor of 4400 W (and, while "Auto-start below min SOC" is on with EV SOC below Min EV SOC, no gate may go below it);
+- the charger maximum of 22 kW;
+- the breaker limiter, which may still cut below 4400 W or stop the charger (`breaker.py`);
 - `clamp_eco_day_to_applied`: after limiting, if the applied setpoint is below the request while ramping, the
   internal ramp setpoint is pulled down to the applied value (never below 4400 W). A limiter stop therefore
-  restarts the ramp from the minimum.
-- "EV is following": the ramp-up never exceeds `3 x max_n P_ev[n] + allowance` (minimum 4400 W), where
-  `P_ev = V_ev x I_ev` and `allowance = max(eco_day_ramp_step_w, _ECO_DAY_FOLLOW_ALLOWANCE_W = 500 W)`, so a car
-  that realises less than the setpoint cannot wind the ramp up to 22 kW. This guard (and only this one) uses the
-  **calibrated** (`correction_pct`-applied) EV current, matching the written setpoint, and the 500 W floor covers
-  `write_setpoint()` rounding and small under-reporting, so a following EV can always advance the ramp. Breaker
-  protection keeps the raw current. The guard is skipped when the EV currents are unknown. Eco start/stop
-  hysteresis (grid/battery gates, cooldown) is unchanged.
+  restarts the ramp from the minimum. It compares with the value written, not with the car's draw.
+
+Windup: a car that ignores the setpoint lets the ramp climb towards 22 kW while export persists. When the car then
+takes the power and the home battery discharges by more than 200 W, the ramp goes down one `eco_day_ramp_step_w`
+per cycle (unchanged). If the 5 min mean battery power falls below `solar_battery_day_power_limit_w` the charge
+stops with a 300 s cooldown (or, below Min EV SOC with "Auto-start below min SOC" on, is held at 4400 W). Eco
+start/stop hysteresis (grid/battery gates, cooldown) is otherwise unchanged. Grid import without battery
+discharge does not trigger a ramp-down (the breaker limiter handles hard overload).
 
 ## 6. Data model and Modbus
 
@@ -243,3 +250,12 @@ All in `tests/unit/test_breaker_protection.py` unless a file is named. Fixtures:
 ## 12. Out of scope
 
 Writing charger register 10039, per-phase EV control (the charger takes one total), and predicting house load.
+
+## Charger rated power cap
+
+The upstream setpoint (Manual, Eco night, Eco grid fallback and the Eco day ramp state) is capped to the charger's
+rated power before it reaches the limiter. The rating comes from read-only register 10058 (0 = 7 kW, 1 = 11 kW,
+2 = 22 kW), read on demand at each Idle -> Charging transition and after each EV (re)connect, never per cycle and
+never in Standby. If the read fails or returns an unknown code the cap is 22 kW. The limiter's own 22 kW ceiling is
+unchanged and it can only lower the setpoint, so it never raises it above the rated power. The 4400 W floor still
+applies unless the cap is below it. The limiter still does not write register 10039.

@@ -96,7 +96,7 @@ This document describes the implementation conventions and architectural decisio
 - **Classes**: `EcoModeHandler`, `ManualModeHandler`, `StandbyModeHandler`, etc.
 - **Pattern**: OO strategy; each mode has a `compute(loop) -> float` method
 - **Dispatch**: `compute_setpoint()` routes to the appropriate handler based on `loop._state.charge_mode`
-- **Eco Day Min Charge**: Optional early-exit in `EcoDayModeHandler` — if `eco_day_min_charge_enabled` and EV SOC < `ev_min_soc_pct`, returns minimum power immediately (before solar/battery checks)
+- **Eco Day Min Charge** (HA label "Auto-start below min SOC"): a floor of `_MIN_CHARGE_W` in Eco day and Eco night while `eco_day_min_charge_enabled` and EV SOC < `ev_min_soc_pct`; the eco-day ramp runs above it and eco gates cannot drop it below or end the session (breaker limiter still can)
 
 #### `app/control/power_utils.py` (Utility Functions)
 - **Purpose**: Helpers for rolling means, grid fallback calculation, battery discharge limiting

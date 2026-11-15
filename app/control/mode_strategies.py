@@ -4,17 +4,15 @@ import logging
 import time as _time
 from abc import ABC, abstractmethod
 
-from app.control.breaker import measured_ev_phase_powers_w
 from app.control.constants import (
     _ECO_DAY_COOLDOWN_S,
-    _ECO_DAY_FOLLOW_ALLOWANCE_W,
     _EV_MAX_SOC_MARGIN_PCT,
-    _MAX_CHARGE_W,
     _MIN_CHARGE_W,
     _RAMP_DEADBAND_W,
 )
 from app.control.power_utils import (
-    clamp,
+    charger_max_w,
+    clamp_charge_w,
     compute_grid_fallback_setpoint,
     get_ev_soc,
     limit_battery_discharge,
@@ -28,6 +26,18 @@ from app.state import ChargeModeState
 
 logger = logging.getLogger(__name__)
 _throttle = LogThrottle(logger, suppress_seconds=60.0)
+
+
+def min_charge_floor_active(loop: ModeLoopProtocol) -> bool:
+    """True while "Auto-start below min SOC" (eco_day_min_charge_enabled) is on and fresh EV SOC < ev_min_soc_pct.
+
+    While active, Eco day and Eco night never return less than _MIN_CHARGE_W (the breaker limiter still may).
+    """
+    state = loop._state
+    if not state.eco_day_min_charge_enabled:
+        return False
+    ev_soc = get_ev_soc(loop)
+    return ev_soc is not None and ev_soc < state.ev_min_soc_pct
 
 
 class ModeSetpointHandler(ABC):
@@ -70,7 +80,7 @@ class ManualModeHandler(ModeSetpointHandler):
 
     def compute(self, loop: ModeLoopProtocol) -> float:
         loop._state_machine.set_mode_state(ChargeModeState.MANUAL)
-        return clamp(loop._state.manual_power_w, _MIN_CHARGE_W, _MAX_CHARGE_W)
+        return clamp_charge_w(loop._state.manual_power_w, loop)
 
 
 class StandbyModeHandler(ModeSetpointHandler):
@@ -105,13 +115,22 @@ class EcoNightModeHandler(ModeSetpointHandler):
         return "eco_night"
 
     def compute(self, loop: ModeLoopProtocol) -> float:
+        """Night rate from the home battery; grid fallback to reach ev_min_soc_pct when the battery is flat.
+
+        Min-charge floor (min_charge_floor_active): min SOC first. The cooldown, the discharge-limit trip and the
+        grid fallback never return less than _MIN_CHARGE_W; the night rate is used when it is higher.
+        """
         state = loop._state
         ev_soc = get_ev_soc(loop)
+        floor = min_charge_floor_active(loop)
 
         # Cooldown after battery discharge limit trip
         if loop._eco_night_stopped_at is not None:
             elapsed = _time.monotonic() - loop._eco_night_stopped_at
             if elapsed < _ECO_DAY_COOLDOWN_S:
+                if floor:
+                    loop._state_machine.set_mode_state(ChargeModeState.ECO_NIGHT_BATTERY)
+                    return _MIN_CHARGE_W
                 loop._state_machine.set_mode_state(ChargeModeState.ECO_NIGHT_FLOOR_STOP)
                 return 0.0
             loop._eco_night_stopped_at = None
@@ -129,7 +148,8 @@ class EcoNightModeHandler(ModeSetpointHandler):
                 loop._state_machine.set_mode_state(ChargeModeState.ECO_NIGHT_FLOOR_STOP)
                 return 0.0
             loop._state_machine.set_mode_state(ChargeModeState.ECO_NIGHT_GRID_FALLBACK)
-            return compute_grid_fallback_setpoint(loop, ev_soc)
+            fallback = compute_grid_fallback_setpoint(loop, ev_soc)
+            return max(fallback, _MIN_CHARGE_W) if floor else fallback
 
         at_floor = (
             state.solar_battery_soc_pct is not None
@@ -142,8 +162,14 @@ class EcoNightModeHandler(ModeSetpointHandler):
                 return 0.0
 
         loop._state_machine.set_mode_state(ChargeModeState.ECO_NIGHT_BATTERY)
-        setpoint = clamp(state.solar_battery_max_ev_charge_power_w, _MIN_CHARGE_W, _MAX_CHARGE_W)
+        setpoint = clamp_charge_w(state.solar_battery_max_ev_charge_power_w, loop)
         result = limit_battery_discharge(loop, setpoint, state.solar_battery_max_discharge_w)
+        if result == 0.0 and floor:
+            logger.debug(
+                "Eco night: battery discharge limit exceeded (battery=%.0f W) while holding min charge floor",
+                state.solar_battery_power_w or 0,
+            )
+            return _MIN_CHARGE_W
         if result == 0.0:
             loop._eco_night_stopped_at = _time.monotonic()
             logger.info(
@@ -156,34 +182,50 @@ class EcoNightModeHandler(ModeSetpointHandler):
 
 
 class EcoDayModeHandler(ModeSetpointHandler):
+    """Eco outside the discharge window: charge from excess solar.
+
+    The ramp is driven only by site signals (grid and battery rolling means, battery power, battery SOC).
+    It never reads EV measurements: the setpoint is a desired value and the car may follow in whole-amp
+    steps, lag, cap itself or ignore it. Bounds: the min-charge floor, the charger maximum, the breaker
+    limiter and clamp_eco_day_to_applied (which compares with the value actually written).
+
+    Eco Day Min Charge (HA label "Auto-start below min SOC") is a floor, not a cap. While enabled and the
+    EV SOC is below ev_min_soc_pct the setpoint is never below _MIN_CHARGE_W and no eco gate (home-battery
+    SOC gate, cooldown, start/stop conditions, not-full minimum) can lower it or end the session. The normal
+    ramp runs above the floor and back down to it, and keeps its state when the SOC crosses ev_min_soc_pct.
+    Only the breaker limiter (applied after this handler) may cut below the floor.
+
+    Sub-states: ECO_DAY_MIN_CHARGE while held at the floor, ECO_DAY_RAMPING while above it.
+    """
+
     @property
     def name(self) -> str:
         return "eco_day"
 
     def compute(self, loop: ModeLoopProtocol) -> float:
         state = loop._state
+        floor = min_charge_floor_active(loop)
 
-        # Eco Day Min Charge: if enabled and EV SOC below min, charge immediately
-        if state.eco_day_min_charge_enabled:
-            ev_soc = get_ev_soc(loop)
-            if ev_soc is not None and ev_soc < state.ev_min_soc_pct:
-                loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_MIN_CHARGE)
-                return _MIN_CHARGE_W
+        def hold_floor() -> float:
+            loop._eco_day_setpoint_w = _MIN_CHARGE_W
+            loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_MIN_CHARGE)
+            return _MIN_CHARGE_W
 
         if state.solar_battery_soc_pct is not None and (
             state.solar_battery_soc_pct < state.eco_day_min_solar_battery_soc_pct
         ):
-            if loop._eco_charging:
+            if loop._eco_charging and not floor:
                 logger.info(
                     "Eco day: pausing charge (home battery SOC %.0f%% < threshold %.0f%%)",
                     state.solar_battery_soc_pct,
                     state.eco_day_min_solar_battery_soc_pct,
                 )
-                loop._eco_charging = False
+            loop._eco_charging = False
             loop._eco_day_battery_full = False
+            if floor:
+                return hold_floor()
             loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_SOC_GATE)
             return 0.0
-
         # Hysteresis for battery-full gate: latch True at eco_day_solar_battery_full_pct,
         # only clear when SOC drops below eco_day_solar_battery_full_exit_pct.
         if state.solar_battery_soc_pct is not None and (
@@ -195,16 +237,13 @@ class EcoDayModeHandler(ModeSetpointHandler):
             and state.solar_battery_soc_pct < state.eco_day_solar_battery_full_exit_pct
         ):
             loop._eco_day_battery_full = False
-
         current_mean_grid = mean_grid_power(loop)
         current_mean_battery = mean_battery_power(loop)
-
-        if not loop._eco_charging and loop._eco_day_stopped_at is not None:
+        if not floor and not loop._eco_charging and loop._eco_day_stopped_at is not None:
             elapsed = _time.monotonic() - loop._eco_day_stopped_at
             if elapsed < _ECO_DAY_COOLDOWN_S:
                 loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_COOLDOWN)
                 return 0.0
-
         if not loop._eco_charging:
             grid_export_met = (
                 current_mean_grid is not None and current_mean_grid <= state.eco_day_grid_export_charge_start_w
@@ -223,11 +262,19 @@ class EcoDayModeHandler(ModeSetpointHandler):
                     current_mean_battery if current_mean_battery is not None else 0,
                 )
             else:
+                if floor:
+                    return hold_floor()
                 loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_WAITING_FOR_EXPORT)
                 return 0.0
-
         if current_mean_battery is not None and current_mean_battery < state.solar_battery_day_power_limit_w:
             loop._eco_charging = False
+            if floor:
+                # No cooldown: a floor-time stop must not impose a 0 W pause when the EV SOC crosses the minimum.
+                logger.debug(
+                    "Eco day: battery limit exceeded (mean battery=%.0f W) while holding min charge floor",
+                    current_mean_battery,
+                )
+                return hold_floor()
             loop._eco_day_stopped_at = _time.monotonic()
             logger.info(
                 "Eco day: stopping charge (mean battery=%.0f W, limit=%.0f W), cooldown %.0f s",
@@ -237,35 +284,22 @@ class EcoDayModeHandler(ModeSetpointHandler):
             )
             loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_COOLDOWN)
             return 0.0
-
         if not loop._eco_day_battery_full:
-            loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_MINIMUM)
+            if floor:
+                loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_MIN_CHARGE)
+            else:
+                loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_MINIMUM)
             return _MIN_CHARGE_W
-
-        ev_power = state.ev_active_power_w
-        if ev_power is None or ev_power <= 0:
-            loop._eco_day_setpoint_w = _MIN_CHARGE_W
-            loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_MINIMUM)
-            return _MIN_CHARGE_W
-
         battery_power = state.solar_battery_power_w
         if battery_power is not None and battery_power < -_RAMP_DEADBAND_W:
             loop._eco_day_setpoint_w -= state.eco_day_ramp_step_w
         else:
             loop._eco_day_setpoint_w += state.eco_day_ramp_step_w
-            # "EV is following" guard: the setpoint is a TOTAL hint over 3 phases. Never wind it
-            # more than a tracking allowance above what the car actually draws (3 x busiest phase), e.g.
-            # a single-phase car only ever realises ~1/3 of the setpoint. Uses the calibrated current
-            # (like the written setpoint) and an allowance of at least _ECO_DAY_FOLLOW_ALLOWANCE_W so
-            # quantisation in write_setpoint() and small under-reporting cannot stall the ramp.
-            follow = measured_ev_phase_powers_w(state, calibrated=True)
-            if follow is not None:
-                allowance = max(state.eco_day_ramp_step_w, _ECO_DAY_FOLLOW_ALLOWANCE_W)
-                follow_limit = max(_MIN_CHARGE_W, 3.0 * max(follow) + allowance)
-                loop._eco_day_setpoint_w = min(loop._eco_day_setpoint_w, follow_limit)
-
-        loop._eco_day_setpoint_w = clamp(loop._eco_day_setpoint_w, _MIN_CHARGE_W, _MAX_CHARGE_W)
-        loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_RAMPING)
+        loop._eco_day_setpoint_w = clamp_charge_w(loop._eco_day_setpoint_w, loop)
+        if floor and loop._eco_day_setpoint_w <= _MIN_CHARGE_W:
+            loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_MIN_CHARGE)
+        else:
+            loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_RAMPING)
         return loop._eco_day_setpoint_w
 
 
@@ -307,7 +341,12 @@ def resolve_mode_handler(loop: ModeLoopProtocol) -> ModeSetpointHandler:
 
 def compute_setpoint(loop: ModeLoopProtocol) -> float:
     """Compute the current charge-power setpoint."""
-    return resolve_mode_handler(loop).compute(loop)
+    result = resolve_mode_handler(loop).compute(loop)
+    if result > 0:
+        cap = charger_max_w(loop)
+        result = min(result, cap)
+        loop._eco_day_setpoint_w = min(loop._eco_day_setpoint_w, cap)
+    return result
 
 
 def setpoint_manual(loop: ModeLoopProtocol) -> float:

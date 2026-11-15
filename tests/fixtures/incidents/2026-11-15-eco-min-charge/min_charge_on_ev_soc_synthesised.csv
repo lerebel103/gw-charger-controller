@@ -1,0 +1,17 @@
+# SYNTHESISED, not a recorded series: the real EV SOC export for this window was never saved.
+# Known facts only: 26.0 until 05:52 UTC, 25.5 at 05:52, then +0.5 % steps (linear in time) reaching 31.5 at 07:03.
+entity_id,state,last_changed
+sensor.ev_charger_ev_soc,26.0,2026-11-15T05:50:00.000Z
+sensor.ev_charger_ev_soc,25.5,2026-11-15T05:52:00.000Z
+sensor.ev_charger_ev_soc,26.0,2026-11-15T05:57:55.000Z
+sensor.ev_charger_ev_soc,26.5,2026-11-15T06:03:50.000Z
+sensor.ev_charger_ev_soc,27.0,2026-11-15T06:09:45.000Z
+sensor.ev_charger_ev_soc,27.5,2026-11-15T06:15:40.000Z
+sensor.ev_charger_ev_soc,28.0,2026-11-15T06:21:35.000Z
+sensor.ev_charger_ev_soc,28.5,2026-11-15T06:27:30.000Z
+sensor.ev_charger_ev_soc,29.0,2026-11-15T06:33:25.000Z
+sensor.ev_charger_ev_soc,29.5,2026-11-15T06:39:20.000Z
+sensor.ev_charger_ev_soc,30.0,2026-11-15T06:45:15.000Z
+sensor.ev_charger_ev_soc,30.5,2026-11-15T06:51:10.000Z
+sensor.ev_charger_ev_soc,31.0,2026-11-15T06:57:05.000Z
+sensor.ev_charger_ev_soc,31.5,2026-11-15T07:03:00.000Z
