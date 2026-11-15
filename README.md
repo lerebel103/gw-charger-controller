@@ -113,6 +113,17 @@ uv run ruff format app/ tests/
 
 See [AGENTS.md](AGENTS.md) for architecture details and module responsibilities.
 
+## Working with agents
+
+Project knowledge for AI agents (Kiro) is committed under `.kiro/`:
+
+- **Steering** (`.kiro/steering/`): `domain-conventions.md` (signs, units, timezone), `design-decisions.md` (eco ramp decisions and charger register facts), `dev-workflow.md` (verification commands, git rules).
+- **Skills** (`.kiro/skills/`): `incident-replay`, `modbus-register`, `release`, `pr-feedback`.
+- **Workflow recipes** (`.kiro/workflows/`): `investigate-incident` and `fix-with-replay`.
+- **Hook** (`.kiro/hooks/block-commit-on-main.json`): blocks `git commit` and `git push` while on `main`.
+
+Drop CSVs, PDFs and logs for an agent into `incoming/` (gitignored). The git policy and architecture are in [AGENTS.md](AGENTS.md).
+
 ## Hardware
 
 - **EV Charger**: GoodWe GW22K-HCA-20 (Modbus TCP, slave ID 247, setpoint range 4.4–22 kW)

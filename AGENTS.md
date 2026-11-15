@@ -6,6 +6,10 @@
 - **Never commit directly on `main`.** All changes must be made on a separate feature branch (e.g. `fix/<topic>` or `feature/<topic>`), ideally in a git worktree under `.worktrees/`, and land on `main` only via a reviewed pull request.
 - **Never push to `main`, force-push, or merge into `main` yourself.** Push only the feature branch and open a PR; the user merges.
 
+## Project Knowledge
+
+Sign conventions, design decisions (eco min-charge floor, no register cap, charger register facts) and the verification commands live in `.kiro/steering/`. Procedures live in `.kiro/skills/`. Read them before changing control logic.
+
 ## Project Architecture
 
 This document describes the implementation conventions and architectural decisions for agents working on this codebase.

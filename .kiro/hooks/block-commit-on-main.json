@@ -1,0 +1,14 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Block git commit/push on main",
+      "trigger": "PreToolUse",
+      "matcher": "execute_bash",
+      "action": {
+        "type": "command",
+        "command": "sh scripts/hooks/block_commit_on_main.sh"
+      }
+    }
+  ]
+}

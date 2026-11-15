@@ -1,0 +1,28 @@
+{
+  "name": "investigate-incident",
+  "description": "Read-only investigation of a Home Assistant history CSV: save a fixture, replay it on main, find the root cause, write a report to .agents/tasks/.",
+  "inputs": {
+    "csv_path": "string",
+    "symptom": "string"
+  },
+  "steps": [
+    {
+      "type": "step",
+      "id": "fixture",
+      "agent": "wf-coder",
+      "prompt": "Read the steering files in .kiro/steering and the incident-replay skill in .kiro/skills/incident-replay/SKILL.md. Input CSV: {{csv_path}} (look in incoming/ if the path is not found). Symptom reported by the user: {{symptom}}\n\nSave a trimmed copy as a fixture under tests/fixtures/incidents/<date>-<topic>/ with a README.md that labels any synthesised series. Read-only otherwise: do not change anything under app/, do not commit, do not touch the charger. Work from a clean worktree under .worktrees/ or a git archive of main under /tmp; never edit main."
+    },
+    {
+      "type": "step",
+      "id": "replay",
+      "agent": "wf-coder",
+      "prompt": "Follow the incident-replay skill. Using the fixture saved in the previous step, replay the incident on main through ControlLoop.run_loop (tests/unit/replay_data.py and tests/unit/eco_replay_harness.py), using a git archive of main under /tmp so the working tree is untouched. Assert on setpoint behaviour from site signals, never against the car's draw. Report which cycles reproduce the symptom: {{symptom}}. Do not change app/ and do not commit."
+    },
+    {
+      "type": "step",
+      "id": "root-cause",
+      "agent": "wf-planner",
+      "prompt": "Find the root cause of the symptom ({{symptom}}) from the replay results and the code. Respect the design-decisions steering (no register cap, no follow guard, breaker.py off-limits) and the domain-conventions steering (sign conventions). Write the report to path /Users/willc/Projects/gw-charger-controller/.agents/tasks/incident-report.md: symptom, evidence with timestamps (UTC and Perth), root cause, and fix options with trade-offs. Do not change code."
+    }
+  ]
+}
