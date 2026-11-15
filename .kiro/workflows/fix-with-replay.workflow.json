@@ -1,0 +1,53 @@
+{
+  "name": "fix-with-replay",
+  "description": "Fix a control-loop problem in a new worktree: plan, then an implement and review loop with the reviewer last. Stops before committing.",
+  "inputs": {
+    "task": "string",
+    "branch": "string"
+  },
+  "steps": [
+    {
+      "type": "step",
+      "id": "worktree",
+      "agent": "wf-coder",
+      "prompt": "Create a git worktree for branch {{branch}} under .worktrees/ (git worktree add .worktrees/<name> -b {{branch}} origin/main). Never commit on main. Print the absolute worktree path.\n\nThen delete any artefacts left by a previous run so the review gate cannot pass on stale data: rm -f /Users/willc/Projects/gw-charger-controller/.agents/tasks/fix-plan.md /Users/willc/Projects/gw-charger-controller/.agents/tasks/fix-verification.md /Users/willc/Projects/gw-charger-controller/.agents/tasks/fix-review.md /Users/willc/Projects/gw-charger-controller/.agents/tasks/fix-review.json. Confirm with ls that none of them exist before finishing."
+    },
+    {
+      "type": "step",
+      "id": "plan",
+      "agent": "wf-planner",
+      "prompt": "Plan the fix for: {{task}}\n\nRead the steering files in .kiro/steering and AGENTS.md. Work in the worktree for branch {{branch}} under .worktrees/. The plan must include a replay test built with the incident-replay skill that fails on main. Write the plan to /Users/willc/Projects/gw-charger-controller/.agents/tasks/fix-plan.md."
+    },
+    {
+      "type": "repeat",
+      "id": "fix-loop",
+      "steps": [
+        {
+          "type": "step",
+          "id": "implement",
+          "agent": "wf-coder",
+          "prompt": "Implement the plan in /Users/willc/Projects/gw-charger-controller/.agents/tasks/fix-plan.md for task: {{task}}, in the worktree for branch {{branch}}. If /Users/willc/Projects/gw-charger-controller/.agents/tasks/fix-review.json exists, read it and the review document it references and fix every finding first. Run the verification commands from the dev-workflow steering and record the results in /Users/willc/Projects/gw-charger-controller/.agents/tasks/fix-verification.md. Do NOT commit or push."
+        },
+        {
+          "type": "step",
+          "id": "review",
+          "agent": "semantic_reviewer",
+          "prompt": "Review the uncommitted changes in the worktree for branch {{branch}} against /Users/willc/Projects/gw-charger-controller/.agents/tasks/fix-plan.md and AGENTS.md. Do not re-run the test suite; rely on /Users/willc/Projects/gw-charger-controller/.agents/tasks/fix-verification.md. Checklist: Standby untouched (no EV Modbus I/O in Standby); no per-cycle register reads added; battery sign convention unchanged; app/control/breaker.py untouched; new tests fail on main (evidence recorded); tests and ruff pass. Write the review to /Users/willc/Projects/gw-charger-controller/.agents/tasks/fix-review.md, then the gate file /Users/willc/Projects/gw-charger-controller/.agents/tasks/fix-review.json shaped {\"verdict\": \"APPROVED\" | \"CHANGES_REQUESTED\", \"findings\": [...], \"reviewDoc\": \"/Users/willc/Projects/gw-charger-controller/.agents/tasks/fix-review.md\"}. Convey the verdict only through that file and finish with send_message severity 'success'.",
+          "artifacts": {
+            "review_doc": "/Users/willc/Projects/gw-charger-controller/.agents/tasks/fix-review.md",
+            "review": "/Users/willc/Projects/gw-charger-controller/.agents/tasks/fix-review.json"
+          }
+        }
+      ],
+      "maxIterations": 3,
+      "stopCondition": {
+        "fileCheck": {
+          "path": "/Users/willc/Projects/gw-charger-controller/.agents/tasks/fix-review.json",
+          "jsonPath": "verdict",
+          "value": "APPROVED"
+        }
+      },
+      "onMaxIterations": "abort"
+    }
+  ]
+}

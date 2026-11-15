@@ -42,7 +42,7 @@ def set_inputs(
         i = tuple(None if x is None else x / V for x in p)  # type: ignore[assignment]
     state.victron_l1_current_a, state.victron_l2_current_a, state.victron_l3_current_a = i
     state.ev_current_raw_a, state.ev_current_raw_b, state.ev_current_raw_c = (w / V for w in ev_w)
-    k = 1.0 + state.correction_pct / 100.0  # calibrated currents (Eco follow guard)
+    k = 1.0 + state.correction_pct / 100.0  # calibrated currents
     state.ev_current_a, state.ev_current_b, state.ev_current_c = (w / V * k for w in ev_w)
 
 

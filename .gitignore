@@ -283,6 +283,13 @@ pids
 *.seed
 *.pid.lock
 
-.kiro
+.kiro/*
+!.kiro/steering/
+!.kiro/skills/
+!.kiro/workflows/
+!.kiro/hooks/
 
 .worktrees/
+
+# User-supplied data handoff (CSVs, PDFs, logs)
+incoming/

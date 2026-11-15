@@ -11,6 +11,7 @@ import pytest
 from app.ha import MQTTClient
 from app.ha.constants import (
     AVAILABILITY_TOPIC,
+    DEPRECATED_DISCOVERY_TOPICS,
     PAYLOAD_AVAILABLE,
     PAYLOAD_NOT_AVAILABLE,
     SENSOR_EXPIRE_AFTER,
@@ -432,6 +433,29 @@ class TestMQTTDiscovery:
                 assert payload["expire_after"] == SENSOR_EXPIRE_AFTER
             else:
                 assert "expire_after" not in payload
+
+
+class TestMaxGridPowerDrawRemoved:
+    @pytest.mark.asyncio
+    async def test_max_power_entities_not_discovered_and_topics_cleared(self):
+        client = MQTTClient(state=AppState(), config_manager=MagicMock(), publish_queue=asyncio.Queue())
+        client._client = AsyncMock()
+        await client._publish_discovery()
+        calls = {c.args[0]: c.args[1] for c in client._client.publish.await_args_list}
+        for topic in (
+            "homeassistant/number/ev_charger_max_grid_power_draw/config",
+            "homeassistant/sensor/ev_charger_max_power/config",
+        ):
+            assert topic in DEPRECATED_DISCOVERY_TOPICS
+            assert calls[topic] == ""
+
+    @pytest.mark.asyncio
+    async def test_max_grid_power_draw_command_is_ignored(self):
+        ev = AsyncMock()
+        client = MQTTClient(state=AppState(), config_manager=MagicMock(), publish_queue=asyncio.Queue(), ev_client=ev)
+        client._client = AsyncMock()
+        await client._handle_command("ev_charger/number/max_grid_power_draw/set", "11000")
+        assert ev.method_calls == []
 
 
 class TestMQTTPublishStateTransientErrors:

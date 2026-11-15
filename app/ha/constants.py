@@ -24,6 +24,7 @@ DEPRECATED_DISCOVERY_TOPICS = [
     "homeassistant/select/ev_charger_plug_and_charge_auto_start/config",
     "homeassistant/number/ev_charger_max_charging_power/config",
     "homeassistant/number/ev_charger_max_grid_power_draw/config",
+    "homeassistant/sensor/ev_charger_max_power/config",
 ]
 
 # Maps command_topic -> (state_attr, value_type)

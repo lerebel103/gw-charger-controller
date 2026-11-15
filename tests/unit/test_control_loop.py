@@ -609,24 +609,27 @@ class TestEcoDayRealWorldScenarios:
         result = setpoint_eco_day(cl)
         assert result == 0.0  # still in cooldown
 
-    def test_100_no_ramp_when_ev_not_drawing_power(self):
-        """When ev_active_power_w is 0 (charger starting up), hold at minimum, don't ramp."""
+    def test_100_ramps_when_ev_not_drawing_power(self):
+        """The ramp never waits for the car: ev_active_power_w == 0 does not hold or reset the ramp.
+
+        Replaces test_100_no_ramp_when_ev_not_drawing_power. The setpoint is a desired value driven by site
+        signals only (grid, battery); the car may lag, step in whole amps or ignore it.
+        """
         state = self._make_state(
             solar_battery_soc_pct=100.0,
             solar_battery_power_w=3000.0,
-            ev_active_power_w=0.0,  # charger hasn't started drawing yet
+            ev_active_power_w=0.0,
         )
         cl = make_control_loop(state)
         cl._eco_charging = True
-        cl._eco_day_setpoint_w = 6000.0  # was ramped up previously
+        cl._eco_day_setpoint_w = 6000.0
         fill_grid_samples(cl, -1500.0)
         fill_battery_samples(cl, 3000.0)
         result = setpoint_eco_day(cl)
-        assert result == _MIN_CHARGE_W  # reset to minimum, not ramped further
-        assert cl._eco_day_setpoint_w == _MIN_CHARGE_W
+        assert result == 6000.0 + _ECO_DAY_RAMP_STEP_W
 
-    def test_100_no_ramp_when_ev_power_none(self):
-        """When ev_active_power_w is None (no reading yet), hold at minimum."""
+    def test_100_ramps_when_ev_power_none(self):
+        """The ramp does not depend on ev_active_power_w being known (replaces the old hold-at-minimum test)."""
         state = self._make_state(
             solar_battery_soc_pct=100.0,
             solar_battery_power_w=3000.0,
@@ -638,7 +641,7 @@ class TestEcoDayRealWorldScenarios:
         fill_grid_samples(cl, -1500.0)
         fill_battery_samples(cl, 3000.0)
         result = setpoint_eco_day(cl)
-        assert result == _MIN_CHARGE_W
+        assert result == 5000.0 + _ECO_DAY_RAMP_STEP_W
 
     def test_100_ramps_when_ev_drawing_power(self):
         """When ev_active_power_w > 0 (charger active), ramp proceeds normally."""
