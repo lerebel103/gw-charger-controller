@@ -3,6 +3,7 @@
 import inspect
 import logging
 import time as _t
+from collections.abc import Sequence
 
 from pymodbus.client import AsyncModbusTcpClient
 from pymodbus.exceptions import ModbusException
@@ -46,6 +47,25 @@ _RECONNECT_DELAY_MAX_S = 60.0
 _CONNECT_TIMEOUT_S = 3.0
 _READ_RETRIES = 3
 _MAX_CONSECUTIVE_READ_FAILURES = 3  # force reconnect after this many consecutive read errors
+
+
+def compute_ev_power_w(
+    voltages: Sequence[float | None],
+    currents: Sequence[float | None],
+) -> float | None:
+    """Return EV power in W as the sum over phases of V x I (power factor 1), rounded to 0.1 W.
+
+    Currents must already include the correction factor. A phase with a missing voltage or current counts
+    as 0 W when at least one other phase is valid; returns None when no phase has both values.
+    """
+    total = 0.0
+    valid = False
+    for v, i in zip(voltages, currents, strict=True):
+        if v is None or i is None:
+            continue
+        total += v * i
+        valid = True
+    return round(total, 1) if valid else None
 
 
 class EVChargerModbusClient:
@@ -462,7 +482,13 @@ class EVChargerModbusClient:
         self._state.ev_current_a = (regs[3] / 10.0) * correction_factor
         self._state.ev_current_b = (regs[4] / 10.0) * correction_factor
         self._state.ev_current_c = (regs[5] / 10.0) * correction_factor
-        self._state.ev_active_power_w = (regs[6] / 10.0 * 1000.0) * correction_factor
+        # Onboard register 10015 (100 W steps, reads low): kept for diagnostics with the correction factor.
+        self._state.ev_active_power_onboard_w = (regs[6] / 10.0 * 1000.0) * correction_factor
+        # Primary power: sum of V x I using the already-corrected currents (no extra correction factor).
+        self._state.ev_active_power_w = compute_ev_power_w(
+            (self._state.ev_voltage_l1_v, self._state.ev_voltage_l2_v, self._state.ev_voltage_l3_v),
+            (self._state.ev_current_a, self._state.ev_current_b, self._state.ev_current_c),
+        )
         self._state.ev_session_energy_wh = regs[7] / 10.0 * 1000.0
         self._state.ev_charger_status = regs[8]
         self._state.ev_charger_status_enum = ChargerStatus.from_register(regs[8])

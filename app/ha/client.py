@@ -192,6 +192,7 @@ class MQTTClient:
 
         # Sensors
         await _pub_if(f"{_PREFIX}/sensor/power/state", _fmt(snapshot.ev_active_power_w))
+        await _pub_if(f"{_PREFIX}/sensor/power_onboard/state", _fmt(snapshot.ev_active_power_onboard_w))
         await _pub_if(f"{_PREFIX}/sensor/session_energy/state", _fmt(snapshot.ev_session_energy_wh))
         await _pub_if(f"{_PREFIX}/sensor/total_energy/state", _fmt(snapshot.ev_total_energy_wh))
         await _pub_if(f"{_PREFIX}/sensor/voltage_l1/state", _fmt(snapshot.ev_voltage_l1_v))

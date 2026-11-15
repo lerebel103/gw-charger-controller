@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.modbus import EVChargerModbusClient
+from app.modbus.ev import compute_ev_power_w
 from app.state import AdvancedChargingMode, AppState, ChargerStatus, PlugAndChargeAutoStart, SinglePhaseSwitching
 
 # ---------------------------------------------------------------------------
@@ -143,7 +144,9 @@ class TestEVChargerModbusClient:
         assert state.ev_current_raw_a == pytest.approx(16.0)
         assert state.ev_current_raw_b == pytest.approx(15.5)
         assert state.ev_current_raw_c == pytest.approx(15.8)
-        assert state.ev_active_power_w == pytest.approx(11000.0 * 1.056)
+        assert state.ev_active_power_onboard_w == pytest.approx(11000.0 * 1.056)
+        expected = 228.0 * 16.0 * 1.056 + 229.0 * 15.5 * 1.056 + 227.0 * 15.8 * 1.056
+        assert state.ev_active_power_w == pytest.approx(expected, abs=0.1)
         assert state.ev_session_energy_wh == 5000.0
         assert state.ev_charger_status == 3
         assert state.ev_charger_status_enum == ChargerStatus.CHARGING_IN_PROGRESS
@@ -248,7 +251,8 @@ class TestEVChargerModbusClient:
 
         # 20% in config is clamped to max 10%
         assert state.ev_current_a == pytest.approx(11.0)
-        assert state.ev_active_power_w == pytest.approx(11000.0)
+        assert state.ev_active_power_onboard_w == pytest.approx(11000.0)
+        assert state.ev_active_power_w == 0.0  # voltages read 0 V in this fixture
 
     @pytest.mark.asyncio
     async def test_read_registers_plug_and_charge_raw_2_maps_to_on(self):
@@ -751,3 +755,24 @@ class TestEvRawCurrentRangeAndWriteResult:
         assert await ec.write_setpoint(5000) is True  # already at the confirmed value
         client.write_register = AsyncMock(side_effect=OSError("boom"))
         assert await ec.write_setpoint(6000) is False
+
+
+class TestComputeEvPowerW:
+    def test_sums_v_times_i_over_phases(self):
+        assert compute_ev_power_w((230.0, 230.0, 230.0), (10.0, 10.0, 10.0)) == 6900.0
+
+    def test_single_phase(self):
+        assert compute_ev_power_w((230.0, 231.0, 229.0), (16.0, 0.0, 0.0)) == 3680.0
+
+    def test_zero_current_is_zero(self):
+        assert compute_ev_power_w((230.0, 230.0, 230.0), (0.0, 0.0, 0.0)) == 0.0
+
+    def test_missing_phase_counts_as_zero_when_others_valid(self):
+        assert compute_ev_power_w((230.0, None, 230.0), (10.0, 10.0, None)) == 2300.0
+
+    def test_all_missing_returns_none(self):
+        assert compute_ev_power_w((None, None, None), (1.0, 2.0, 3.0)) is None
+        assert compute_ev_power_w((230.0, 230.0, 230.0), (None, None, None)) is None
+
+    def test_rounds_to_one_decimal(self):
+        assert compute_ev_power_w((230.123, 0.0, 0.0), (1.0, 0.0, 0.0)) == 230.1

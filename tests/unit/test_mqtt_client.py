@@ -381,6 +381,7 @@ def _published(client: AsyncMock) -> dict[str, object]:
 # Numeric/enum state topics that must never receive the string "unavailable".
 _NUMERIC_STATE_TOPICS = [
     "ev_charger/sensor/power/state",
+    "ev_charger/sensor/power_onboard/state",
     "ev_charger/sensor/session_energy/state",
     "ev_charger/sensor/total_energy/state",
     "ev_charger/sensor/voltage_l1/state",
@@ -512,6 +513,7 @@ class TestMQTTPublishStateTransientErrors:
 
         snapshot = StateSnapshot(
             ev_active_power_w=1500.0,
+            ev_active_power_onboard_w=1400.0,
             ev_soc_pct=42.0,
             l1_voltage_drop_pct=1.234,
             l2_voltage_drop_pct=2.0,
@@ -529,6 +531,7 @@ class TestMQTTPublishStateTransientErrors:
 
         published = _published(client._client)
         assert published["ev_charger/sensor/power/state"] == "1500.0"
+        assert published["ev_charger/sensor/power_onboard/state"] == "1400.0"
         assert published["ev_charger/sensor/ev_soc/state"] == "42.0"
         assert published["ev_charger/sensor/l1_voltage_drop_perc/state"] == "1.23"
         assert published["ev_charger/sensor/l1_breaker_headroom/state"] == "50.0"
@@ -707,3 +710,15 @@ class TestMQTTRuntimeSelectNoneConfirm:
         assert "ev_charger/select/advanced_charging_mode/state" not in published
         # Standby exception path still disconnects.
         ev.disconnect.assert_awaited_once()
+
+
+def test_power_entities_computed_and_onboard():
+    from app.ha.entities import ENTITIES
+
+    by_id = {e["unique_id"]: e for e in ENTITIES}
+    computed = by_id["ev_charger_power"]
+    assert computed["name"] == "Charge Power (computed)"
+    assert computed["state_topic"] == "ev_charger/sensor/power/state"
+    onboard = by_id["ev_charger_power_onboard"]
+    assert onboard["name"] == "Charge Power (onboard)"
+    assert onboard["state_topic"] == "ev_charger/sensor/power_onboard/state"

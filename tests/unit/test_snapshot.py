@@ -42,6 +42,7 @@ def _populate_ev_fields(state: AppState) -> None:
     state.ev_plug_and_charge_auto_start_enum = PlugAndChargeAutoStart.ON
     state.ev_single_phase_switching_enum = SinglePhaseSwitching.ENABLED
     state.ev_active_power_w = 1500.0
+    state.ev_active_power_onboard_w = 1400.0
     state.ev_session_energy_wh = 1234.0
     state.ev_voltage_l1_v = 230.0
     state.ev_voltage_l2_v = 231.0
@@ -72,6 +73,7 @@ _MASKED_SNAPSHOT_FIELDS = [
     "ev_plug_and_charge_auto_start_display",
     "ev_single_phase_switching_display",
     "ev_active_power_w",
+    "ev_active_power_onboard_w",
     "ev_session_energy_wh",
     "ev_voltage_l1_v",
     "ev_voltage_l2_v",
@@ -146,6 +148,7 @@ class TestBuildSnapshotEVCommsHealthy:
 
         assert snapshot.ev_connected is True
         assert snapshot.ev_active_power_w == 1500.0
+        assert snapshot.ev_active_power_onboard_w == 1400.0
         assert snapshot.ev_voltage_l1_v == 230.0
         assert snapshot.ev_current_a == 6.0
         assert snapshot.l1_voltage_drop_pct == 1.2

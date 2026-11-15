@@ -127,7 +127,8 @@ def _text(unique_id: str, name: str, slug: str) -> dict[str, Any]:
 
 
 ENTITIES: list[dict[str, Any]] = [
-    _sensor("ev_charger_power", "EV Charger Power", "power", "W", "power", "measurement"),
+    _sensor("ev_charger_power", "Charge Power (computed)", "power", "W", "power", "measurement"),
+    _sensor("ev_charger_power_onboard", "Charge Power (onboard)", "power_onboard", "W", "power", "measurement"),
     _sensor("ev_charger_session_energy", "Session Energy", "session_energy", "Wh", "energy", "total_increasing"),
     _sensor("ev_charger_total_energy", "EV Charger Total Energy", "total_energy", "Wh", "energy", "total_increasing"),
     _sensor("ev_charger_voltage_l1", "EV Voltage L1", "voltage_l1", "V", "voltage", "measurement"),

@@ -38,6 +38,7 @@ class AppState:
     ev_single_phase_switching: int | None = None
     ev_single_phase_switching_enum: SinglePhaseSwitching | None = None
     ev_active_power_w: float | None = None
+    ev_active_power_onboard_w: float | None = None
     ev_session_energy_wh: float | None = None
     ev_voltage_l1_v: float | None = None
     ev_voltage_l2_v: float | None = None
@@ -164,6 +165,7 @@ class StateSnapshot:
     ev_plug_and_charge_auto_start_display: str | None = None
     ev_single_phase_switching_display: str | None = None
     ev_active_power_w: float | None = None
+    ev_active_power_onboard_w: float | None = None
     ev_session_energy_wh: float | None = None
     ev_voltage_l1_v: float | None = None
     ev_voltage_l2_v: float | None = None
