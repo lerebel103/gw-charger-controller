@@ -1,9 +1,10 @@
 {
   "name": "investigate-incident",
-  "description": "Read-only investigation of a Home Assistant history CSV: save a fixture, replay it on main, find the root cause, write a report to .agents/tasks/.",
+  "description": "Read-only investigation of a Home Assistant history CSV: save a fixture, replay it on main, find the root cause, write a report to .agents/tasks/incident-<slug>.md.",
   "inputs": {
     "csv_path": "string",
-    "symptom": "string"
+    "symptom": "string",
+    "slug": "string"
   },
   "steps": [
     {
@@ -22,7 +23,7 @@
       "type": "step",
       "id": "root-cause",
       "agent": "wf-planner",
-      "prompt": "Find the root cause of the symptom ({{symptom}}) from the replay results and the code. Respect the design-decisions steering (no register cap, no follow guard, breaker.py off-limits) and the domain-conventions steering (sign conventions). Write the report to path /Users/willc/Projects/gw-charger-controller/.agents/tasks/incident-report.md: symptom, evidence with timestamps (UTC and Perth), root cause, and fix options with trade-offs. Do not change code."
+      "prompt": "Find the root cause of the symptom ({{symptom}}) from the replay results and the code. Respect the design-decisions steering (no register cap, no follow guard, breaker.py off-limits) and the domain-conventions steering (sign conventions). Write the report to path /Users/willc/Projects/gw-charger-controller/.agents/tasks/incident-{{slug}}.md: symptom, evidence with timestamps (UTC and Perth), root cause, and fix options with trade-offs. Do not change code. The slug ({{slug}}) is a short kebab-case name such as 2026-11-15-eco-stall; if a report with that name already exists, stop and ask instead of overwriting it."
     }
   ]
 }

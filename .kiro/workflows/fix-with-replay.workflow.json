@@ -10,7 +10,7 @@
       "type": "step",
       "id": "worktree",
       "agent": "wf-coder",
-      "prompt": "Create a git worktree for branch {{branch}} under .worktrees/ (git worktree add .worktrees/<name> -b {{branch}} origin/main). Never commit on main. Print the absolute worktree path."
+      "prompt": "Create a git worktree for branch {{branch}} under .worktrees/ (git worktree add .worktrees/<name> -b {{branch}} origin/main). Never commit on main. Print the absolute worktree path.\n\nThen delete any artefacts left by a previous run so the review gate cannot pass on stale data: rm -f /Users/willc/Projects/gw-charger-controller/.agents/tasks/fix-plan.md /Users/willc/Projects/gw-charger-controller/.agents/tasks/fix-verification.md /Users/willc/Projects/gw-charger-controller/.agents/tasks/fix-review.md /Users/willc/Projects/gw-charger-controller/.agents/tasks/fix-review.json. Confirm with ls that none of them exist before finishing."
     },
     {
       "type": "step",
