@@ -6,6 +6,8 @@ Two kinds of input:
 
 The setpoint is a desired value; assertions in the tests are about the setpoint's response to site signals,
 never about matching the car's draw.
+
+The EV sample is taken before the site read in each cycle, so the site signals and the car draw are aligned.
 """
 
 from __future__ import annotations
@@ -309,20 +311,12 @@ async def run_scenario(
     victron.connected = True
     victron.ensure_connected = AsyncMock()
 
-    async def victron_read():
-        for key, value in site(cycle_no["i"], car_out["power"]).items():
-            setattr(state, key, value)
-        if state.ev_soc_pct is not None and ev_soc_pct is not None:
-            state.ev_soc_pct_updated_at = clock()
-
-    victron.read = AsyncMock(side_effect=victron_read)
-
-    ev = AsyncMock()
-    ev.connected = True
-    ev.ensure_connected = AsyncMock()
-
-    async def ev_read():
+    def sample_ev():
+        """Sample the car once per cycle, before the site read, so site and car are aligned."""
         i = cycle_no["i"]
+        if cycle_no.get("sampled") == i:
+            return
+        cycle_no["sampled"] = i
         if ev_fields is not None:
             for key, value in ev_fields(i, state).items():
                 setattr(state, key, value)
@@ -341,6 +335,22 @@ async def run_scenario(
             state.ev_charger_status_enum = (
                 ChargerStatus.IDLE_CONNECTOR_PLUGGED if car_out["stopped"] else ChargerStatus.CHARGING_IN_PROGRESS
             )
+
+    async def victron_read():
+        sample_ev()
+        for key, value in site(cycle_no["i"], car_out["power"]).items():
+            setattr(state, key, value)
+        if state.ev_soc_pct is not None and ev_soc_pct is not None:
+            state.ev_soc_pct_updated_at = clock()
+
+    victron.read = AsyncMock(side_effect=victron_read)
+
+    ev = AsyncMock()
+    ev.connected = True
+    ev.ensure_connected = AsyncMock()
+
+    async def ev_read():
+        sample_ev()
         state.ev_comm_healthy = True
         state.ev_last_read_ok_at = clock()
 

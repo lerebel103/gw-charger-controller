@@ -71,3 +71,19 @@ async def test_run_scenario_records_one_cycle_each_and_advances_clock(monkeypatc
     assert [b.t - a.t for a, b in zip(result.records, result.records[1:], strict=False)] == [CYCLE_S] * 6
     assert result.commanded[0] == 4440.0
     assert set(CAR_MODELS) == {"step", "uneven", "lagging", "ignoring", "ideal"}
+
+
+@pytest.mark.asyncio
+async def test_site_receives_current_cycle_car_power(monkeypatch):
+    seen: list[tuple[int, float]] = []
+
+    def site(i, car_power):
+        seen.append((i, car_power))
+        return {}
+
+    class SetpointCar:
+        def respond(self, written_w, volts, i):
+            return (1.0, 1.0, 1.0), float(i + 1) * 100.0, 1.0
+
+    await run_scenario(monkeypatch, n_cycles=4, site=site, car=SetpointCar())
+    assert seen[:4] == [(0, 100.0), (1, 200.0), (2, 300.0), (3, 400.0)]
