@@ -45,6 +45,7 @@ def build_snapshot(loop: SnapshotLoopProtocol) -> StateSnapshot:
         if ev_ok and loop._state.ev_single_phase_switching_enum is not None
         else None,
         ev_active_power_w=loop._state.ev_active_power_w if ev_ok else None,
+        ev_active_power_onboard_w=loop._state.ev_active_power_onboard_w if ev_ok else None,
         ev_session_energy_wh=loop._state.ev_session_energy_wh if ev_ok else None,
         ev_voltage_l1_v=loop._state.ev_voltage_l1_v if ev_ok else None,
         ev_voltage_l2_v=loop._state.ev_voltage_l2_v if ev_ok else None,
