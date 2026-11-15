@@ -68,6 +68,16 @@ def compute_ev_power_w(
     return round(total, 1) if valid else None
 
 
+def ev_is_actively_charging(status_raw: int | None, power_register_raw: int | None) -> bool:
+    """Return True only when status register 10017 is 3 (charging in progress) and register 10015 is above 0.
+    Both registers come from the same block read, so they describe the same poll. The charger can report a
+    residual phase current of a few amps for one poll while idle or after a stop; this rule rejects it.
+    """
+    return (
+        status_raw == ChargerStatus.CHARGING_IN_PROGRESS and power_register_raw is not None and power_register_raw > 0
+    )
+
+
 class EVChargerModbusClient:
     """Modbus TCP client for the GW22K-HCA-20 EV charger.
 
@@ -485,8 +495,9 @@ class EVChargerModbusClient:
         # Onboard register 10015 (100 W steps, reads low): kept for diagnostics with the correction factor.
         self._state.ev_active_power_onboard_w = (regs[6] / 10.0 * 1000.0) * correction_factor
         # Primary power: sum of V x I using the validated raw currents with the correction applied once;
-        # rejected (out-of-range) phases are None and do not contribute.
-        self._state.ev_active_power_w = compute_ev_power_w(
+        # rejected (out-of-range) phases are None and do not contribute. Forced to 0 W unless the charger is
+        # actively charging (status 10017 == 3 and register 10015 > 0); a None sum (no valid phase) stays None.
+        power_w = compute_ev_power_w(
             (self._state.ev_voltage_l1_v, self._state.ev_voltage_l2_v, self._state.ev_voltage_l3_v),
             tuple(
                 None if raw is None else raw * correction_factor
@@ -497,6 +508,16 @@ class EVChargerModbusClient:
                 )
             ),
         )
+        if power_w is not None and not ev_is_actively_charging(regs[8], regs[6]):
+            if power_w != 0.0:
+                logger.debug(
+                    "Zeroing computed EV power %.1f W while not charging (status=%s, reg10015=%s)",
+                    power_w,
+                    regs[8],
+                    regs[6],
+                )
+            power_w = 0.0
+        self._state.ev_active_power_w = power_w
         self._state.ev_session_energy_wh = regs[7] / 10.0 * 1000.0
         self._state.ev_charger_status = regs[8]
         self._state.ev_charger_status_enum = ChargerStatus.from_register(regs[8])
