@@ -383,7 +383,6 @@ _NUMERIC_STATE_TOPICS = [
     "ev_charger/sensor/power/state",
     "ev_charger/sensor/session_energy/state",
     "ev_charger/sensor/total_energy/state",
-    "ev_charger/number/max_grid_power_draw/state",
     "ev_charger/sensor/voltage_l1/state",
     "ev_charger/sensor/voltage_l2/state",
     "ev_charger/sensor/voltage_l3/state",
@@ -436,153 +435,27 @@ class TestMQTTDiscovery:
                 assert "expire_after" not in payload
 
 
-_MAX_GRID_CMD = "ev_charger/number/max_grid_power_draw/set"
-_MAX_GRID_STATE = "ev_charger/number/max_grid_power_draw/state"
-
-
-def _max_grid_ev(*, write=True, readback=11000.0):
-    ev = AsyncMock()
-    ev.connected = True
-    ev.ensure_connected = AsyncMock()
-    ev.disconnect = AsyncMock()
-    ev.write_max_grid_power_w = AsyncMock(return_value=write)
-    ev.read_max_grid_power_w = AsyncMock(return_value=readback)
-    return ev
-
-
-def _max_grid_client(ev, *, mode="Eco", cached=None):
-    state = AppState(charge_mode=mode, ev_charger_max_power_w=cached)
-    client = MQTTClient(state=state, config_manager=MagicMock(), publish_queue=asyncio.Queue(), ev_client=ev)
-    client._client = AsyncMock()
-    return client
-
-
-class TestMaxGridPowerDrawNumber:
+class TestMaxGridPowerDrawRemoved:
     @pytest.mark.asyncio
-    async def test_discovery_payload(self):
-        client = MQTTClient(state=AppState(), config_manager=MagicMock(), publish_queue=asyncio.Queue())
-        client._client = AsyncMock()
-        await client._publish_discovery()
-        payloads = {c.args[0]: json.loads(c.args[1]) for c in client._client.publish.await_args_list if c.args[1]}
-        number = payloads["homeassistant/number/ev_charger_max_grid_power_draw/config"]
-        assert number["name"] == "Max Grid Power Draw"
-        assert number["mode"] == "box"
-        assert (number["min"], number["max"], number["step"]) == (1400, 22000, 100)
-        assert number["unit_of_measurement"] == "W"
-        assert number["state_topic"] == _MAX_GRID_STATE
-        assert number["command_topic"] == _MAX_GRID_CMD
-
-    @pytest.mark.asyncio
-    async def test_diagnostic_sensor_gone_and_its_topic_cleared(self):
+    async def test_max_power_entities_not_discovered_and_topics_cleared(self):
         client = MQTTClient(state=AppState(), config_manager=MagicMock(), publish_queue=asyncio.Queue())
         client._client = AsyncMock()
         await client._publish_discovery()
         calls = {c.args[0]: c.args[1] for c in client._client.publish.await_args_list}
-        assert not any(
-            c.args[1] and json.loads(c.args[1]).get("unique_id") == "ev_charger_max_power"
-            for c in client._client.publish.await_args_list
-        )
-        assert calls["homeassistant/sensor/ev_charger_max_power/config"] == ""
-        assert calls["homeassistant/number/ev_charger_max_grid_power_draw/config"] != ""
-
-    def test_number_topic_not_deprecated(self):
-        assert "homeassistant/number/ev_charger_max_grid_power_draw/config" not in DEPRECATED_DISCOVERY_TOPICS
-        assert "homeassistant/sensor/ev_charger_max_power/config" in DEPRECATED_DISCOVERY_TOPICS
+        for topic in (
+            "homeassistant/number/ev_charger_max_grid_power_draw/config",
+            "homeassistant/sensor/ev_charger_max_power/config",
+        ):
+            assert topic in DEPRECATED_DISCOVERY_TOPICS
+            assert calls[topic] == ""
 
     @pytest.mark.asyncio
-    async def test_normal_mode_writes_reads_back_and_updates_cache(self):
-        ev = _max_grid_ev(readback=11000.0)
-        client = _max_grid_client(ev, cached=22000.0)
-        await client._handle_command(_MAX_GRID_CMD, "11000")
-        ev.ensure_connected.assert_awaited_once()
-        ev.write_max_grid_power_w.assert_awaited_once_with(11000.0)
-        ev.read_max_grid_power_w.assert_awaited_once()
-        ev.disconnect.assert_not_awaited()
-        assert client._state.ev_charger_max_power_w == 11000.0
-        client._client.publish.assert_awaited_once_with(_MAX_GRID_STATE, "11000.0", retain=True)
-
-    @pytest.mark.asyncio
-    async def test_standby_uses_short_session_without_control_loop_io(self):
-        ev = _max_grid_ev(readback=9000.0)
-        client = _max_grid_client(ev, mode="Standby", cached=11000.0)
-        await client._handle_command(_MAX_GRID_CMD, "9000")
-        ev.ensure_connected.assert_awaited_once()
-        ev.write_max_grid_power_w.assert_awaited_once_with(9000.0)
-        ev.read_max_grid_power_w.assert_awaited_once()
-        ev.disconnect.assert_awaited_once()
-        assert client._state.ev_charger_max_power_w == 9000.0
-        # only the three register calls plus connect/disconnect; nothing from the control loop
-        called = {c[0] for c in ev.method_calls}
-        assert called == {"ensure_connected", "write_max_grid_power_w", "read_max_grid_power_w", "disconnect"}
-
-    @pytest.mark.asyncio
-    async def test_standby_disconnects_when_readback_fails(self):
-        ev = _max_grid_ev(readback=None)
-        client = _max_grid_client(ev, mode="Standby", cached=11000.0)
-        await client._handle_command(_MAX_GRID_CMD, "9000")
-        ev.disconnect.assert_awaited_once()
-        assert client._state.ev_charger_max_power_w == 11000.0
-        client._client.publish.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_payload_rounds_to_100w(self):
-        ev = _max_grid_ev(readback=11000.0)
-        client = _max_grid_client(ev, cached=22000.0)
-        await client._handle_command(_MAX_GRID_CMD, "10960")
-        ev.write_max_grid_power_w.assert_awaited_once_with(11000.0)
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("bad", ["abc", "nan", "inf", "1300", "22100", ""])
-    async def test_invalid_payload_rejected_and_cached_value_echoed(self, bad):
-        ev = _max_grid_ev()
-        client = _max_grid_client(ev, cached=11000.0)
-        await client._handle_command(_MAX_GRID_CMD, bad)
-        ev.ensure_connected.assert_not_awaited()
-        ev.write_max_grid_power_w.assert_not_awaited()
-        client._client.publish.assert_awaited_once_with(_MAX_GRID_STATE, "11000.0", retain=True)
-
-    @pytest.mark.asyncio
-    async def test_value_equal_to_cache_is_noop(self):
-        ev = _max_grid_ev()
-        client = _max_grid_client(ev, cached=11000.0)
-        await client._handle_command(_MAX_GRID_CMD, "11000")
-        ev.ensure_connected.assert_not_awaited()
-        ev.write_max_grid_power_w.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_failed_write_leaves_cache_untouched(self):
-        ev = _max_grid_ev(write=False)
-        client = _max_grid_client(ev, mode="Standby", cached=11000.0)
-        await client._handle_command(_MAX_GRID_CMD, "9000")
-        ev.read_max_grid_power_w.assert_not_awaited()
-        ev.disconnect.assert_awaited_once()
-        assert client._state.ev_charger_max_power_w == 11000.0
-
-    @pytest.mark.asyncio
-    async def test_readback_differing_from_request_wins(self):
-        ev = _max_grid_ev(readback=7000.0)
-        client = _max_grid_client(ev, cached=11000.0)
-        await client._handle_command(_MAX_GRID_CMD, "9000")
-        assert client._state.ev_charger_max_power_w == 7000.0
-        client._client.publish.assert_awaited_once_with(_MAX_GRID_STATE, "7000.0", retain=True)
-
-    @pytest.mark.asyncio
-    async def test_config_state_publishes_number_only_when_cached(self):
-        client = _max_grid_client(None, cached=None)
-        await client._publish_config_state()
-        assert _MAX_GRID_STATE not in _published(client._client)
-        client = _max_grid_client(None, cached=11000.0)
-        await client._publish_config_state()
-        assert _published(client._client)[_MAX_GRID_STATE] == "11000.0"
-
-    @pytest.mark.asyncio
-    async def test_state_published_from_snapshot_and_skipped_when_none(self):
-        client = _max_grid_client(None)
-        await client._publish_state(StateSnapshot(ev_max_grid_power_draw_w=11000.0))
-        assert _published(client._client)[_MAX_GRID_STATE] == "11000.0"
-        client = _max_grid_client(None)
-        await client._publish_state(StateSnapshot(ev_max_grid_power_draw_w=None))
-        assert _MAX_GRID_STATE not in _published(client._client)
+    async def test_max_grid_power_draw_command_is_ignored(self):
+        ev = AsyncMock()
+        client = MQTTClient(state=AppState(), config_manager=MagicMock(), publish_queue=asyncio.Queue(), ev_client=ev)
+        client._client = AsyncMock()
+        await client._handle_command("ev_charger/number/max_grid_power_draw/set", "11000")
+        assert ev.method_calls == []
 
 
 class TestMQTTPublishStateTransientErrors:

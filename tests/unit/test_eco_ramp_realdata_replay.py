@@ -67,7 +67,6 @@ async def run_recorded(
     on_cycle=None,
     cycle_s=CYCLE_S,
     ev_soc_pct=26.0,
-    charger_max_w=None,
 ) -> tuple[Result, list[dict]]:
     series = load_replay(*paths)
     rows = cycles(series, start, end, step_s=cycle_s)
@@ -110,7 +109,6 @@ async def run_recorded(
         ramp_w=ramp_w,
         on_cycle=on_cycle,
         cycle_s=cycle_s,
-        charger_max_w=charger_max_w,
     )
     return result, rows
 
@@ -133,7 +131,7 @@ def _connected(result, rows):
     return [r for r, row in zip(result.records, rows, strict=True) if row["t"] >= _CONNECT_AT.timestamp()]
 
 
-def _ramp_invariant_cycles(result, connected_from: int = 0, cap: float = _MAX_CHARGE_W) -> int:
+def _ramp_invariant_cycles(result, connected_from: int = 0) -> int:
     """Check: battery >= -200 W -> the ramp rises by exactly one step (or sits at the max).
 
     Returns the number of qualifying cycles. Cycles where the session is not charging or the ramp was pulled
@@ -148,7 +146,7 @@ def _ramp_invariant_cycles(result, connected_from: int = 0, cap: float = _MAX_CH
             continue
         if cur.commanded_w < cur.ramp_w:  # breaker cut
             continue
-        assert cur.ramp_w == min(prev.ramp_w + _STEP, cap), f"cycle {cur.i}: {prev.ramp_w} -> {cur.ramp_w}"
+        assert cur.ramp_w == min(prev.ramp_w + _STEP, _MAX_CHARGE_W), f"cycle {cur.i}: {prev.ramp_w} -> {cur.ramp_w}"
         n += 1
     return n
 
@@ -185,20 +183,6 @@ async def test_r1_csv1_min_charge_is_floor_ramp_rises_above_4400(monkeypatch):
 # --------------------------------------------------------------------------------------------------
 # R2: CSV 2, min charge OFF: must climb past the old 4910 W pin, +40 W every cycle
 # --------------------------------------------------------------------------------------------------
-async def test_r5_csv1_cap_11000_never_exceeded(monkeypatch):
-    """Charger max 11 kW (register 10039 = 110): setpoint, written value and ramp state stay <= 11000 W."""
-    result, rows = await _csv1(monkeypatch, charger_max_w=11000.0)
-    recs = _connected(result, rows)
-    assert result.state.ev_charger_max_power_w == 11000.0
-    assert result.ev.read_max_grid_power_w.await_count >= 1
-    assert all(r.commanded_w <= 11000.0 for r in result.records)
-    assert all(r.written_w <= 11000.0 for r in result.records if r.written_w is not None)
-    assert all(w <= 11000.0 for _, w in result.writes)
-    assert all(r.ramp_w <= 11000.0 for r in result.records)
-    assert all(r.commanded_w >= _MIN_CHARGE_W for r in recs)
-    assert _ramp_invariant_cycles(result, result.records.index(recs[0]), cap=11000.0) >= 100
-
-
 async def test_r2_csv2_ramp_climbs_through_old_stall(monkeypatch):
     """The recorded battery discharges 606 -> 247 W for the first cycles (ramp held at 4400), then stays inside or
     above the 200 W deadband (134 W discharge, then 70-97 W charge) with export on all phases: from there the ramp

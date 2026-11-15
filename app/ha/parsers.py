@@ -1,7 +1,5 @@
 """Payload parsing helpers for Home Assistant runtime commands."""
 
-import math
-
 from app.state import AdvancedChargingMode, PlugAndChargeAutoStart, SinglePhaseSwitching
 
 
@@ -65,14 +63,3 @@ def parse_single_phase_payload(payload: str) -> SinglePhaseSwitching | None:
     except TypeError, ValueError:
         return None
     return SinglePhaseSwitching.from_register(raw)
-
-
-def parse_max_grid_power_draw_payload(payload: str) -> float | None:
-    """Parse max grid power draw payload in watts (register range 1400-22000 W, rounded to 100 W)."""
-    try:
-        value = float(str(payload).strip())
-    except TypeError, ValueError:
-        return None
-    if not math.isfinite(value) or not (1400.0 <= value <= 22000.0):
-        return None
-    return round(value / 100.0) * 100.0

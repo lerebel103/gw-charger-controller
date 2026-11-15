@@ -7,8 +7,8 @@ call site in `app/control/loop.py`, eco anti-windup in `app/control/mode_strateg
 
 Keep the **average** current on every grid phase below **80 %** of the main breaker rating
 (`grid_breaker_limit_a`, default 32 A, so 25.6 A). The EV is throttled only when a phase actually imports more
-than that, and never because of export. The limiter only ever reduces the setpoint and never touches charger
-register 10039. Everything is judged in **amps**; volts are only used to turn amps into the watts of the setpoint.
+than that, and never because of export. The limiter only ever reduces the setpoint and never touches the charger
+registers. Everything is judged in **amps**; volts are only used to turn amps into the watts of the setpoint.
 
 ## 2. Background and constraints
 
@@ -249,15 +249,4 @@ All in `tests/unit/test_breaker_protection.py` unless a file is named. Fixtures:
 
 ## 12. Out of scope
 
-Writing charger register 10039 from the limiter (only the HA number writes it), per-phase EV control (the charger takes one total), and predicting house load.
-
-## Charger max power cap
-
-The upstream setpoint (Manual, Eco night, Eco grid fallback and the Eco day ramp state) is capped to the charger's
-configured max power before it reaches the limiter. The value comes from register 10039 ("Maximum Grid Electricity
-Draw Power", watts = raw x 100, valid 1.4-22 kW), read on demand at each Idle -> Charging transition and after each EV (re)connect, never per cycle and
-never in Standby. If the read fails or is out of range the last good value is kept, else the cap is 22 kW. The limiter's own 22 kW ceiling is
-unchanged and it can only lower the setpoint, so it never raises it above the configured max power. The 4400 W floor still
-applies unless the cap is below it. The limiter never writes register 10039; only the HA "Max Grid Power Draw" number does. That number writes on
-demand, reads the register back, and on confirmation updates the cached cap at once (in Standby through a short
-connect, write, read-back, disconnect session).
+Writing charger registers from the limiter, per-phase EV control (the charger takes one total), and predicting house load.

@@ -54,7 +54,6 @@ def build_snapshot(loop: SnapshotLoopProtocol) -> StateSnapshot:
         ev_current_c=loop._state.ev_current_c if ev_ok else None,
         ev_completion_time_h=loop._state.ev_completion_time_h if ev_ok else None,
         ev_total_energy_wh=loop._state.ev_total_energy_wh if ev_ok else None,
-        ev_max_grid_power_draw_w=loop._state.ev_charger_max_power_w if ev_ok else None,
         ev_soc_pct=get_ev_soc(loop),
         l1_voltage_drop_pct=loop._state.l1_voltage_drop_pct if ev_ok else None,
         l2_voltage_drop_pct=loop._state.l2_voltage_drop_pct if ev_ok else None,

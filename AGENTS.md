@@ -79,7 +79,7 @@ This document describes the implementation conventions and architectural decisio
 - **Cycle**: Runs periodically (every few seconds)
   1. Reconnect the EV client on standby exit; read Victron and (outside Standby) EV charger registers
   2. Compute the setpoint with the mode-specific strategy (Eco, Manual, or Standby)
-  3. Run the session state machine (Idle → Charging → Stopping → Stopped); at Idle → Charging, refresh the 10039 cap and apply it
+  3. Run the session state machine (Idle → Charging → Stopping → Stopped)
   4. Apply the phase-current limiter (`limit_phase_current`), then write the setpoint to the charger via Modbus
   5. Queue a `StateSnapshot` (and charging events) for the MQTT client to publish
 
@@ -99,7 +99,7 @@ This document describes the implementation conventions and architectural decisio
 - **Eco Day Min Charge** (HA label "Auto-start below min SOC"): a floor of `_MIN_CHARGE_W` in Eco day and Eco night while `eco_day_min_charge_enabled` and EV SOC < `ev_min_soc_pct`; the eco-day ramp runs above it and eco gates cannot drop it below or end the session (breaker limiter still can)
 
 #### `app/control/power_utils.py` (Utility Functions)
-- **Purpose**: Helpers for sample recording and pruning, EV SOC lookup, clamping, and the charger max power cap (`charger_max_w`: min of the register 10039 value and 22 kW, 22 kW if unread)
+- **Purpose**: Helpers for sample recording and pruning, EV SOC lookup, and clamping
 - **Consumers**: mode_strategy handlers and the state machine
 
 #### `app/control/breaker.py` / `breaker_state.py` (Phase-current limiter)
@@ -113,8 +113,7 @@ This document describes the implementation conventions and architectural decisio
 - **Purpose**: Modbus register I/O for the charger
 - **Register operations**:
   - Read every cycle: status, active power, current, voltage, completion time, total energy, car connection, plug-and-charge, single-phase switching
-  - Read on demand (never per cycle, never in Standby): 10039 (Max Grid Power Draw, also the setpoint cap) after each EV connect and at each Idle → Charging transition, and as read-back after a write
-  - Write: setpoint (first), start command, stop command, and on-demand runtime registers 10032, 10019, 10023, 10039
+  - Write: setpoint (first), start command, stop command, and on-demand runtime registers 10032, 10019, 10023
 - **Reconnect/Backoff**: Exponential backoff on comms failure
 
 #### `app/modbus/victron.py` (VictronModbusClient)
@@ -127,7 +126,7 @@ This document describes the implementation conventions and architectural decisio
 - **Discovery**: Publish MQTT discovery payloads on startup
 - **Publishing**: Drain the publish queue (snapshots, charging events, config republish requests) and publish sensor values; helpers live in `app/ha/constants.py`, `entities.py` and `parsers.py`
 - **Commands**: Subscribe to charger commands (mode, max SOC, etc.), validate, apply to state
-- **Exception**: Standby mode allows on-demand charger register writes (register 10032, 10019, 10023, 10039)
+- **Exception**: Standby mode allows on-demand charger register writes (register 10032, 10019, 10023)
 
 #### `app/state/models.py` (AppState)
 - **Structure**: Mutable dataclass holding all runtime state
@@ -153,7 +152,6 @@ An explicit exception is allowed for user-initiated Home Assistant commands that
 - Register **10032** (Advanced Charging Mode)
 - Register **10019** (Plug and Charge auto start)
 - Register **10023** (Single phase switching)
-- Register **10039** (Max Grid Power Draw, also the setpoint cap)
 
 Constraints for this exception:
 - Must be **on-demand only** (no periodic polling/writing)

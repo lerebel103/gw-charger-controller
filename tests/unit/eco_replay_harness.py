@@ -280,13 +280,11 @@ async def run_scenario(
     on_cycle: Callable[[int, AppState, ControlLoop], None] | None = None,
     cycle_s: float = CYCLE_S,
     night: bool = False,
-    charger_max_w: float | None = None,
 ) -> Result:
     """Run ``n_cycles`` iterations of ControlLoop.run_loop and record one CycleRecord per cycle.
 
     ``car`` models the EV (closed loop); ``ev_fields(i, state)`` instead feeds recorded EV values (open loop).
     ``night`` selects the Eco night (discharge) window instead of Eco day.
-    ``charger_max_w`` makes the mocked charger report that max power (register 10039); None means no cap read.
     ``cycle_s`` is the fake-clock advance per cycle (the real loop period is the interval plus Modbus time).
     """
     clock = FakeClock()
@@ -321,9 +319,6 @@ async def run_scenario(
 
     ev = AsyncMock()
     ev.connected = True
-    if charger_max_w is not None:
-        ev.connection_epoch = 1
-        ev.read_max_grid_power_w = AsyncMock(return_value=charger_max_w)
     ev.ensure_connected = AsyncMock()
 
     async def ev_read():

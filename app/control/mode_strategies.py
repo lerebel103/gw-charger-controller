@@ -7,12 +7,12 @@ from abc import ABC, abstractmethod
 from app.control.constants import (
     _ECO_DAY_COOLDOWN_S,
     _EV_MAX_SOC_MARGIN_PCT,
+    _MAX_CHARGE_W,
     _MIN_CHARGE_W,
     _RAMP_DEADBAND_W,
 )
 from app.control.power_utils import (
-    charger_max_w,
-    clamp_charge_w,
+    clamp,
     compute_grid_fallback_setpoint,
     get_ev_soc,
     limit_battery_discharge,
@@ -80,7 +80,7 @@ class ManualModeHandler(ModeSetpointHandler):
 
     def compute(self, loop: ModeLoopProtocol) -> float:
         loop._state_machine.set_mode_state(ChargeModeState.MANUAL)
-        return clamp_charge_w(loop._state.manual_power_w, loop)
+        return clamp(loop._state.manual_power_w, _MIN_CHARGE_W, _MAX_CHARGE_W)
 
 
 class StandbyModeHandler(ModeSetpointHandler):
@@ -162,7 +162,7 @@ class EcoNightModeHandler(ModeSetpointHandler):
                 return 0.0
 
         loop._state_machine.set_mode_state(ChargeModeState.ECO_NIGHT_BATTERY)
-        setpoint = clamp_charge_w(state.solar_battery_max_ev_charge_power_w, loop)
+        setpoint = clamp(state.solar_battery_max_ev_charge_power_w, _MIN_CHARGE_W, _MAX_CHARGE_W)
         result = limit_battery_discharge(loop, setpoint, state.solar_battery_max_discharge_w)
         if result == 0.0 and floor:
             logger.debug(
@@ -295,7 +295,7 @@ class EcoDayModeHandler(ModeSetpointHandler):
             loop._eco_day_setpoint_w -= state.eco_day_ramp_step_w
         else:
             loop._eco_day_setpoint_w += state.eco_day_ramp_step_w
-        loop._eco_day_setpoint_w = clamp_charge_w(loop._eco_day_setpoint_w, loop)
+        loop._eco_day_setpoint_w = clamp(loop._eco_day_setpoint_w, _MIN_CHARGE_W, _MAX_CHARGE_W)
         if floor and loop._eco_day_setpoint_w <= _MIN_CHARGE_W:
             loop._state_machine.set_mode_state(ChargeModeState.ECO_DAY_MIN_CHARGE)
         else:
@@ -341,12 +341,7 @@ def resolve_mode_handler(loop: ModeLoopProtocol) -> ModeSetpointHandler:
 
 def compute_setpoint(loop: ModeLoopProtocol) -> float:
     """Compute the current charge-power setpoint."""
-    result = resolve_mode_handler(loop).compute(loop)
-    if result > 0:
-        cap = charger_max_w(loop)
-        result = min(result, cap)
-        loop._eco_day_setpoint_w = min(loop._eco_day_setpoint_w, cap)
-    return result
+    return resolve_mode_handler(loop).compute(loop)
 
 
 def setpoint_manual(loop: ModeLoopProtocol) -> float:

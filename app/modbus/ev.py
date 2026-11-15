@@ -34,9 +34,6 @@ _REG_PLUG_AND_CHARGE = 10019
 _REG_SINGLE_PHASE_SWITCHING = 10023
 _REG_MAX_CHARGING_POWER = 10029
 _REG_CHARGER_ENABLE = 10060
-_REG_MAX_GRID_POWER = 10039  # RW, U16, gain 10 kW, range 14..220 (1.4-22 kW): watts = raw * 100
-_RAW_MAX_GRID_POWER_MIN = 14
-_RAW_MAX_GRID_POWER_MAX = 220
 _RAW_SETPOINT_MIN = 44  # practical minimum to reliably start charging (= 4.4 kW)
 _RAW_RUNTIME_SETPOINT_MIN = 42  # documented physical minimum (= 4.2 kW)
 _RAW_SETPOINT_MAX = 220  # 22.0 kW
@@ -49,13 +46,6 @@ _RECONNECT_DELAY_MAX_S = 60.0
 _CONNECT_TIMEOUT_S = 3.0
 _READ_RETRIES = 3
 _MAX_CONSECUTIVE_READ_FAILURES = 3  # force reconnect after this many consecutive read errors
-
-
-def decode_max_grid_power_w(raw: int) -> float | None:
-    """Convert register 10039 (gain 10 kW, valid 14..220) to watts; out-of-range values give None."""
-    if _RAW_MAX_GRID_POWER_MIN <= raw <= _RAW_MAX_GRID_POWER_MAX:
-        return raw * 100.0
-    return None
 
 
 class EVChargerModbusClient:
@@ -76,16 +66,10 @@ class EVChargerModbusClient:
         self._reconnect_after: float = 0.0
         self._serial_read_attempted: bool = False
         self._consecutive_read_failures: int = 0
-        self._connection_epoch: int = 0
 
     @property
     def connected(self) -> bool:
         return self._client is not None and self._client.connected
-
-    @property
-    def connection_epoch(self) -> int:
-        """Incremented on every successful (re)connect."""
-        return self._connection_epoch
 
     # ------------------------------------------------------------------
     # Connection management
@@ -130,7 +114,6 @@ class EVChargerModbusClient:
                 self._connected_port = port
                 self._reconnect_attempt = 0
                 self._serial_read_attempted = False
-                self._connection_epoch += 1
                 _throttle.clear("ev_connect_fail")
                 _throttle.reset("ev_write_setpoint_disconnected")
                 _throttle.info("ev_connected", "Connected to EV charger at %s:%d", ip, port)
@@ -353,46 +336,6 @@ class EVChargerModbusClient:
             return mode
         except (ModbusException, OSError) as exc:
             logger.warning("Failed to read plug-and-charge auto start: %s", exc)
-            return None
-
-    async def write_max_grid_power_w(self, power_w: float) -> bool:
-        """Write register 10039 (maximum grid electricity draw power) from watts (raw = W / 100).
-
-        The caller updates cached state after reading the value back.
-        """
-        if not self.connected:
-            return False
-        raw = round(power_w / 100)
-        if not (_RAW_MAX_GRID_POWER_MIN <= raw <= _RAW_MAX_GRID_POWER_MAX):
-            logger.warning("Refusing to write max grid power draw: %.0f W is out of range", power_w)
-            return False
-        try:
-            resp = await self._client.write_register(address=_REG_MAX_GRID_POWER, value=raw, device_id=_SLAVE_ID)
-            if resp.isError():
-                raise ModbusException(f"Max grid power write error: {resp}")
-            logger.info(
-                "Wrote max grid power draw: register %d <- raw=%d (%.0f W)", _REG_MAX_GRID_POWER, raw, raw * 100.0
-            )
-            return True
-        except (ModbusException, OSError) as exc:
-            logger.warning("Failed to write max grid power draw: %s", exc)
-            return False
-
-    async def read_max_grid_power_w(self) -> float | None:
-        """Read register 10039 (maximum grid electricity draw power) and return watts, or None if unavailable/invalid.
-
-        On demand only (after EV connect, at session start, read-back after a write); never per cycle.
-        The caller owns warning logs.
-        """
-        if not self.connected:
-            return None
-        try:
-            resp = await self._client.read_holding_registers(address=_REG_MAX_GRID_POWER, count=1, device_id=_SLAVE_ID)
-            if resp.isError():
-                raise ModbusException(f"Max grid power read error: {resp}")
-            return decode_max_grid_power_w(resp.registers[0])
-        except (ModbusException, OSError) as exc:
-            logger.debug("Failed to read charger max grid power: %s", exc)
             return None
 
     async def read_single_phase_switching(self) -> SinglePhaseSwitching | None:

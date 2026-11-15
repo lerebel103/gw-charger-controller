@@ -9,12 +9,11 @@ from app.control.breaker import confirm_applied, limit_phase_current, phase_head
 from app.control.breaker_state import BreakerLimiterState, PhaseSample
 from app.control.constants import (
     _EV_MAX_SOC_DEFAULT,
-    _MAX_CHARGE_W,
     _MIN_CHARGE_W,
     _STOP_PRESET_W,
 )
 from app.control.mode_strategies import clamp_eco_day_to_applied, compute_setpoint
-from app.control.power_utils import charger_max_w, record_samples
+from app.control.power_utils import record_samples
 from app.control.protocols import VictronClientProtocol
 from app.control.snapshot import build_snapshot
 from app.control.state_machine import (
@@ -58,8 +57,6 @@ class ControlLoop:
         self._eco_day_stopped_at: float | None = None
         self._eco_night_stopped_at: float | None = None
         self._standby_write_quiet: bool = False
-        self._seen_ev_epoch: int = -1
-        self._charger_max_warned: bool = False
         self._grid_power_samples: list[tuple[float, float]] = []
         self._battery_power_samples: list[tuple[float, float]] = []
         self._phase_samples: list[list[PhaseSample]] = [[], [], []]
@@ -83,26 +80,6 @@ class ControlLoop:
         if self._state_machine.should_send_stop_command(setpoint):
             await self._ev_client.stop_charging()
 
-    async def _refresh_charger_max(self) -> None:
-        """Read the charger max power (register 10039) on demand and cache it. Never raises, never in Standby."""
-        if self._state.charge_mode == "Standby" or self._standby_write_quiet or not self._ev_client.connected:
-            return
-        try:
-            value = await self._ev_client.read_max_grid_power_w()
-        except Exception:  # noqa: BLE001 - the control loop must survive any read failure
-            logger.debug("Charger max power read raised", exc_info=True)
-            value = None
-        if isinstance(value, float) and 1400.0 <= value <= _MAX_CHARGE_W:
-            self._state.ev_charger_max_power_w = min(value, _MAX_CHARGE_W)
-            self._charger_max_warned = False
-            return
-        if not self._charger_max_warned:
-            self._charger_max_warned = True
-            logger.warning(
-                "Could not read charger max power (register 10039); using %.0f W",
-                charger_max_w(self),
-            )
-
     async def run_loop(self) -> None:
         """Master control loop: read -> compute -> write -> publish."""
         while True:
@@ -120,10 +97,6 @@ class ControlLoop:
             await self._victron_client.read()
             if not self._standby_write_quiet:
                 await self._ev_client.read()
-                epoch = self._ev_client.connection_epoch
-                if self._state.charge_mode != "Standby" and isinstance(epoch, int) and epoch != self._seen_ev_epoch:
-                    self._seen_ev_epoch = epoch
-                    await self._refresh_charger_max()
 
             record_samples(self)
             # EV-dependent history is only valid while EV readings are fresh. Drop it whenever EV reads
@@ -152,15 +125,7 @@ class ControlLoop:
             self._prev_ev_connected = self._state.ev_connected
 
             setpoint = compute_setpoint(self)
-            was_idle = self._charging_session_state == ChargeSessionState.IDLE
             setpoint = self._state_machine.apply_charging_events(setpoint)
-            if was_idle and self._charging_session_state == ChargeSessionState.CHARGING:
-                self._charger_max_warned = False
-                await self._refresh_charger_max()
-                cap = charger_max_w(self)
-                logger.info("Charger configured max power: %.0f W (register 10039)", cap)
-                setpoint = min(setpoint, cap)
-                self._eco_day_setpoint_w = min(self._eco_day_setpoint_w, cap)
             requested = setpoint
             setpoint = limit_phase_current(self, setpoint)
             clamp_eco_day_to_applied(self, requested, setpoint)

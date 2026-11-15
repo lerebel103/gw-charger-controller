@@ -19,7 +19,7 @@ An intelligent EV charging controller that bridges a **GoodWe GW22K-HCA-20** cha
 | Mode | Behaviour |
 |------|-----------|
 | **Eco** | Maximises solar self-consumption. Daytime: ramps EV power up/down to track solar surplus. Night: draws from home battery at a fixed rate to reach a minimum EV SOC by morning. |
-| **Manual** | Charges at a fixed user-configured power (4.4 kW up to the charger rated power, 22 kW at most). Resets to Eco on unplug. |
+| **Manual** | Charges at a fixed user-configured power (4.4–22 kW). Resets to Eco on unplug. |
 | **Standby** | Stops charging and suppresses all EV charger communication. |
 
 ### Auto-start below min SOC
@@ -36,7 +36,7 @@ An optional feature (toggle the "Auto-start below min SOC" switch in HA; formerl
 - Disabled by default to preserve existing behaviour
 
 ### Eco Day Ramp
-The eco day ramp is driven only by site signals: grid power, battery power and battery SOC (rolling means for start/stop, instantaneous battery power for the ramp direction). Each control cycle it adds one ramp step (`eco_day_ramp_step_w`) while battery power is above -200 W. When the battery discharges by more than 200 W it ramps down by one ramp step per cycle; a 5 minute mean battery discharge beyond `solar_battery_day_power_limit_w` stops the charge (or holds 4.4 kW while below Min EV SOC with the switch on). The car's actual draw is never used: the setpoint is a desired value, and a car that steps current in whole amps, lags or ignores it cannot stall the ramp. The ramp is bounded by 4.4 kW (or the floor above), the charger rated power (11 kW on an 11 kW charger, never above 22 kW), the breaker limiter and the anti-windup clamp (see [docs/grid-power-scaling.md](docs/grid-power-scaling.md)).
+The eco day ramp is driven only by site signals: grid power, battery power and battery SOC (rolling means for start/stop, instantaneous battery power for the ramp direction). Each control cycle it adds one ramp step (`eco_day_ramp_step_w`) while battery power is above -200 W. When the battery discharges by more than 200 W it ramps down by one ramp step per cycle; a 5 minute mean battery discharge beyond `solar_battery_day_power_limit_w` stops the charge (or holds 4.4 kW while below Min EV SOC with the switch on). The car's actual draw is never used: the setpoint is a desired value, and a car that steps current in whole amps, lags or ignores it cannot stall the ramp. The ramp is bounded by 4.4 kW (or the floor above), the 22 kW charger maximum, the breaker limiter and the anti-windup clamp (see [docs/grid-power-scaling.md](docs/grid-power-scaling.md)).
 ## Breaker Protection
 
 An always-on safety mechanism that keeps the 30 s mean grid **import current** on every phase below 80% of the configured breaker rating (32 A default, so 25.6 A). The Victron reports signed per-phase current (import positive, export negative), so export never counts as load. Current, not power, is used because a low power factor draws more current than the real power suggests. The cap is anchored to the measured EV current (the charger setpoint is a total over three phases). A raw reading above 90% drops to the minimum charge power immediately, and missing grid data fails safe to the minimum in every mode. See [docs/grid-power-scaling.md](docs/grid-power-scaling.md) for the full algorithm; `scripts/victron_probe.py` is a read-only tool to check the Victron registers.
@@ -82,7 +82,7 @@ All other settings (charge mode, thresholds, timings, breaker limit) are configu
 The controller auto-discovers in HA via MQTT — no manual YAML needed. You get:
 
 - **Sensors**: charger power, per-phase voltage/current, grid current, breaker headroom %, EV SOC, session energy, total energy, voltage drop, uptime
-- **Controls**: charge mode select, manual power slider, EV SOC targets, breaker limit, Max Grid Power Draw (register 10039, 1.4-22 kW in 100 W steps, also the setpoint cap; settable in Standby through a short on-demand session), discharge window times, all eco thresholds
+- **Controls**: charge mode select, manual power slider, EV SOC targets, breaker limit, discharge window times, all eco thresholds
 - **Diagnostics**: charger status, communication link states, serial number
 - **Events**: charging started/stopping/stopped with reason and energy totals
 
@@ -115,7 +115,7 @@ See [AGENTS.md](AGENTS.md) for architecture details and module responsibilities.
 
 ## Hardware
 
-- **EV Charger**: GoodWe GW22K-HCA-20 (Modbus TCP, slave ID 247, setpoint range 4.4–22 kW; every setpoint is capped to the charger's configured max power (register 10039, "Maximum Grid Electricity Draw Power", editable in HA as the "Max Grid Power Draw" number), read on demand at each charging session start and after each (re)connect, never per cycle and never in Standby; if it cannot be read, 22 kW is used and a warning is logged once)
+- **EV Charger**: GoodWe GW22K-HCA-20 (Modbus TCP, slave ID 247, setpoint range 4.4–22 kW)
 - **Energy System**: Victron GX (Modbus TCP, unit ID 100 for system, configurable for grid meter)
 
 ## License

@@ -285,7 +285,6 @@ ENTITIES: list[dict[str, Any]] = [
         "%",
     ),
     _number("ev_charger_grid_breaker_limit", "Grid Breaker Limit", "grid_breaker_limit", 10, 100, 1, "A"),
-    _number("ev_charger_max_grid_power_draw", "Max Grid Power Draw", "max_grid_power_draw", 1400, 22000, 100, "W"),
     _text("ev_charger_solar_battery_discharge_start", "Solar Batt Discharge Start", "solar_battery_discharge_start"),
     _text("ev_charger_solar_battery_discharge_end", "Solar Batt Discharge End", "solar_battery_discharge_end"),
     _text("ev_charger_ip", "EV Charger IP", "ev_charger_ip"),
