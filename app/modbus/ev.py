@@ -484,10 +484,18 @@ class EVChargerModbusClient:
         self._state.ev_current_c = (regs[5] / 10.0) * correction_factor
         # Onboard register 10015 (100 W steps, reads low): kept for diagnostics with the correction factor.
         self._state.ev_active_power_onboard_w = (regs[6] / 10.0 * 1000.0) * correction_factor
-        # Primary power: sum of V x I using the already-corrected currents (no extra correction factor).
+        # Primary power: sum of V x I using the validated raw currents with the correction applied once;
+        # rejected (out-of-range) phases are None and do not contribute.
         self._state.ev_active_power_w = compute_ev_power_w(
             (self._state.ev_voltage_l1_v, self._state.ev_voltage_l2_v, self._state.ev_voltage_l3_v),
-            (self._state.ev_current_a, self._state.ev_current_b, self._state.ev_current_c),
+            tuple(
+                None if raw is None else raw * correction_factor
+                for raw in (
+                    self._state.ev_current_raw_a,
+                    self._state.ev_current_raw_b,
+                    self._state.ev_current_raw_c,
+                )
+            ),
         )
         self._state.ev_session_energy_wh = regs[7] / 10.0 * 1000.0
         self._state.ev_charger_status = regs[8]

@@ -742,6 +742,9 @@ class TestEvRawCurrentRangeAndWriteResult:
         assert state.ev_current_raw_a is None
         assert state.ev_current_raw_b == pytest.approx(16.0)
         assert state.ev_current_raw_c is None
+        # Rejected phases must not feed the computed power: only phase B (16.0 A raw) contributes.
+        expected = 229.0 * 16.0 * (1.0 + state.correction_pct / 100.0)
+        assert state.ev_active_power_w == pytest.approx(expected, abs=0.1)
 
     @pytest.mark.asyncio
     async def test_write_setpoint_returns_confirmation(self):
