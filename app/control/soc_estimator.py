@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from app.control.constants import (
+    _MAX_CHARGE_W,
     _SOC_K_DEFAULT,
     _SOC_K_EMA_WEIGHT,
     _SOC_K_LEARN_MIN_ENERGY_KWH,
@@ -81,6 +82,7 @@ class SocEstimator:
         self._anchor: Anchor | None = None
         self._last_known_soc_pct: float | None = None
         self._prev_energy_wh: float | None = None
+        self._prev_energy_t: float | None = None
         self._acc_wh: float = 0.0
         self._discontinuities: int = 0
         self._span_first: Anchor | None = None
@@ -117,6 +119,7 @@ class SocEstimator:
         energy_wh: float | None,
         capacity_kwh: float | None = None,
         k: float = _SOC_K_DEFAULT,
+        now_s: float | None = None,
     ) -> KLearnResult | None:
         """Feed one cycle of inputs: accumulate energy, anchor on genuine SOC changes, refine k.
 
@@ -125,12 +128,17 @@ class SocEstimator:
         if capacity_kwh != self._span_capacity_kwh:
             self._span_first = None
             self._span_capacity_kwh = capacity_kwh
-        if not self._accumulate(energy_wh):
+        if not self._accumulate(energy_wh, now_s):
             self._span_first = None
         if soc_pct is None or not soc_fresh:
             self._span_first = None
             return None
         self._last_known_soc_pct = soc_pct
+        if energy_wh is None:
+            # No energy baseline (read failure, Standby): anchoring now would pair this SOC with stale energy
+            # and double count once energy recovers. Wait for a fresh energy reading.
+            self._span_first = None
+            return None
         anchor = self._anchor
         stalled = False
         if anchor is not None and capacity_kwh is not None and capacity_kwh > 0 and k > 0:
@@ -167,33 +175,40 @@ class SocEstimator:
         k_new = max(_SOC_K_MIN, min(k + _SOC_K_EMA_WEIGHT * (k_span - k), _SOC_K_MAX))
         return KLearnResult(k_span=k_span, k_new=k_new)
 
-    def _accumulate(self, energy_wh: float | None) -> bool:
+    def _accumulate(self, energy_wh: float | None, now_s: float | None = None) -> bool:
         """Add the energy step; return False when the step is a gap (missing, reset or discontinuity)."""
         if energy_wh is None:
             return False
         prev = self._prev_energy_wh
+        prev_t = self._prev_energy_t
         self._prev_energy_wh = energy_wh
+        self._prev_energy_t = now_s
         if prev is None:
             return True
         delta = energy_wh - prev
         if delta < 0:
             return False  # register reset at a new session
-        if delta > _SOC_MAX_ENERGY_STEP_WH:
+        limit = _SOC_MAX_ENERGY_STEP_WH
+        if now_s is not None and prev_t is not None:
+            # After a long gap, accept what the charger could physically have delivered (10 % margin).
+            limit = max(limit, _MAX_CHARGE_W * max(now_s - prev_t, 0.0) / 3600.0 * 1.1)
+        if delta > limit:
             self._discontinuities += 1
             return False
         self._acc_wh += delta
         return True
 
     def begin_session(self) -> None:
-        """Plug-in edge: drop the anchor, fall back to the last known reported SOC if any."""
-        self._anchor = None
+        """Plug-in edge: keep the energy-adjusted anchor (accumulated energy is continuous across sessions).
+
+        Without one, fall back to the last known reported SOC. A changed report supersedes either.
+        """
         self._span_first = None
-        if self._last_known_soc_pct is not None:
+        if self._anchor is None and self._last_known_soc_pct is not None:
             self._anchor = Anchor(self._last_known_soc_pct, self._acc_wh, AnchorOrigin.LAST_KNOWN)
 
     def end_session(self) -> None:
-        """Unplug edge: clear the anchor, keep the last known SOC."""
-        self._anchor = None
+        """Unplug edge: keep the anchor so SOC gained from delivered energy survives a reconnect."""
         self._span_first = None
 
     def estimated_pct(self, capacity_kwh: float, k: float) -> float | None:

@@ -218,11 +218,9 @@ class TestSessions:
         est = SocEstimator()
         _obs(est, 48.5, 6800.0)
         est.end_session()
-        assert est.anchor is None
         assert est.last_known_soc_pct == 48.5
         est.begin_session()
         assert est.anchor is not None
-        assert est.anchor.origin is AnchorOrigin.LAST_KNOWN
         _obs(est, None, 6800.0, fresh=False)
         _obs(est, None, 7620.0, fresh=False)
         assert est.estimated_pct(CAP, 1.0) == pytest.approx(49.5)
@@ -233,7 +231,7 @@ class TestSessions:
         est.begin_session()
         _obs(est, 48.5, 0.0)
         assert est.anchor is not None
-        assert est.anchor.origin is AnchorOrigin.LAST_KNOWN
+        assert est.anchor.soc_pct == 48.5
 
     def test_new_report_replaces_last_known_anchor(self):
         est = SocEstimator()
@@ -438,3 +436,41 @@ class TestKRefinement:
         learned = [r for r in results if r is not None]
         assert learned
         assert all(0.8 <= r.k_new <= 1.2 for r in learned)
+
+
+class TestReviewFixes:
+    def test_reconnect_keeps_energy_adjusted_estimate(self):
+        est = SocEstimator()
+        _obs(est, 70.0, 0.0)
+        _deliver(est, 0.0, 8200.0)
+        before = est.estimated_pct(CAP, 1.0)
+        est.end_session()
+        est.begin_session()
+        assert est.estimated_pct(CAP, 1.0) == pytest.approx(before)
+        assert before > 79.9
+
+    def test_large_step_accepted_after_long_gap(self):
+        est = SocEstimator()
+        est.observe(soc_pct=70.0, soc_fresh=True, energy_wh=0.0, now_s=0.0)
+        est.observe(soc_pct=None, soc_fresh=False, energy_wh=8200.0, now_s=3600.0)
+        assert est.discontinuities == 0
+        assert est.accumulated_wh == 8200.0
+
+    def test_large_step_rejected_when_physically_impossible(self):
+        est = SocEstimator()
+        est.observe(soc_pct=70.0, soc_fresh=True, energy_wh=0.0, now_s=0.0)
+        est.observe(soc_pct=None, soc_fresh=False, energy_wh=8200.0, now_s=10.0)
+        assert est.discontinuities == 1
+
+    def test_no_anchor_without_energy(self):
+        est = SocEstimator()
+        _obs(est, 70.0, None)
+        assert est.anchor is None
+        assert est.estimated_pct(CAP, 1.0) is None
+
+    def test_soc_change_during_energy_gap_not_double_counted(self):
+        est = SocEstimator()
+        _obs(est, 76.0, 0.0)
+        _obs(est, 78.0, None)  # report moved while energy unavailable
+        _obs(est, 78.0, 1640.0)  # energy recovers, already reflected in the report
+        assert est.estimated_pct(CAP, 1.0) == pytest.approx(78.0)

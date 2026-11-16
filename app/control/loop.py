@@ -105,9 +105,12 @@ class ControlLoop:
         k_result = estimator.observe(
             soc_pct=state.ev_soc_pct,
             soc_fresh=ev_soc_is_fresh(self),
-            energy_wh=state.ev_session_energy_wh,
+            energy_wh=state.ev_session_energy_wh
+            if state.ev_comm_healthy and state.charge_mode != "Standby" and not self._standby_write_quiet
+            else None,
             capacity_kwh=state.ev_battery_capacity_kwh,
             k=k_prev,
+            now_s=_time.monotonic(),
         )
         if k_result is not None:
             self._apply_k_result(k_prev, k_result)
