@@ -135,9 +135,12 @@ class SocEstimator:
             return None
         self._last_known_soc_pct = soc_pct
         if energy_wh is None:
-            # No energy baseline (read failure, Standby): anchoring now would pair this SOC with stale energy
-            # and double count once energy recovers. Wait for a fresh energy reading.
+            # No fresh energy (read failure, Standby). A changed report is genuine, but when in the gap it
+            # happened is unknown. Anchor at the energy accumulated before the gap so everything delivered
+            # during the gap counts after the anchor (conservative: may overestimate, never loses energy).
             self._span_first = None
+            if self._anchor is not None and soc_pct != self._anchor.soc_pct:
+                self._anchor = Anchor(soc_pct, self._acc_wh, AnchorOrigin.REPORTED)
             return None
         anchor = self._anchor
         stalled = False
@@ -186,12 +189,18 @@ class SocEstimator:
         if prev is None:
             return True
         delta = energy_wh - prev
-        if delta < 0:
-            return False  # register reset at a new session
         limit = _SOC_MAX_ENERGY_STEP_WH
         if now_s is not None and prev_t is not None:
             # After a long gap, accept what the charger could physically have delivered (10 % margin).
             limit = max(limit, _MAX_CHARGE_W * max(now_s - prev_t, 0.0) / 3600.0 * 1.1)
+        if delta < 0:
+            # Register reset at a new session. If the zero reading was missed (Standby, outage), the register
+            # already holds energy delivered since the reset, so count it (conservative).
+            if energy_wh <= limit:
+                self._acc_wh += energy_wh
+            else:
+                self._discontinuities += 1
+            return False
         if delta > limit:
             self._discontinuities += 1
             return False

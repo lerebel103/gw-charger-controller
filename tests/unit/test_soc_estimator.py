@@ -468,9 +468,16 @@ class TestReviewFixes:
         assert est.anchor is None
         assert est.estimated_pct(CAP, 1.0) is None
 
-    def test_soc_change_during_energy_gap_not_double_counted(self):
+    def test_soc_change_during_energy_gap_counts_gap_energy_conservatively(self):
         est = SocEstimator()
         _obs(est, 76.0, 0.0)
         _obs(est, 78.0, None)  # report moved while energy unavailable
-        _obs(est, 78.0, 1640.0)  # energy recovers, already reflected in the report
-        assert est.estimated_pct(CAP, 1.0) == pytest.approx(78.0)
+        _obs(est, 78.0, 1640.0)  # energy recovers; gap energy counts after the anchor (may overestimate)
+        assert est.estimated_pct(CAP, 1.0) == pytest.approx(80.0)
+
+    def test_missed_session_reset_keeps_new_session_energy(self):
+        est = SocEstimator()
+        _obs(est, 70.0, 0.0)
+        _deliver(est, 0.0, 10000.0)
+        _obs(est, 70.0, 2000.0)  # new session, zero reading missed; register already holds 2 kWh
+        assert est.accumulated_wh == pytest.approx(12000.0)
