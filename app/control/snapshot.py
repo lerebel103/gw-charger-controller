@@ -3,8 +3,9 @@
 import time as _time
 from datetime import datetime
 
-from app.control.power_utils import get_ev_soc
+from app.control.power_utils import resolve_ev_soc
 from app.control.protocols import SnapshotLoopProtocol
+from app.control.soc_estimator import effective_k
 from app.state import StateSnapshot
 
 
@@ -16,11 +17,14 @@ def build_snapshot(loop: SnapshotLoopProtocol) -> StateSnapshot:
     publish and ``expire_after`` can elapse, flipping those entities to
     ``unknown`` in Home Assistant instead of pinning them to stale values.
     Victron-derived fields, the SOC (already staleness-guarded by
-    ``get_ev_soc``), the breaker-headroom diagnostics (Victron + config
+    ``resolve_ev_soc``), the estimator diagnostics (estimated SOC, source, stalled
+    flag, learned k; they come from one resolve call and stay published during an EV
+    outage), the breaker-headroom diagnostics (Victron + config
     derived), the serial number (discovery identity), and local control values
     are intentionally left unmasked.
     """
     ev_ok = loop._state.ev_comm_healthy
+    soc = resolve_ev_soc(loop)
     return StateSnapshot(
         ev_connected=loop._state.ev_connected if ev_ok else None,
         ev_charger_status=loop._state.ev_charger_status if ev_ok else None,
@@ -55,7 +59,11 @@ def build_snapshot(loop: SnapshotLoopProtocol) -> StateSnapshot:
         ev_current_c=loop._state.ev_current_c if ev_ok else None,
         ev_completion_time_h=loop._state.ev_completion_time_h if ev_ok else None,
         ev_total_energy_wh=loop._state.ev_total_energy_wh if ev_ok else None,
-        ev_soc_pct=get_ev_soc(loop),
+        ev_soc_pct=soc.effective_pct,
+        ev_soc_estimated_pct=soc.estimated_pct,
+        ev_soc_source=soc.source.value,
+        ev_soc_stalled=soc.stalled,
+        ev_soc_k=effective_k(loop._state),
         l1_voltage_drop_pct=loop._state.l1_voltage_drop_pct if ev_ok else None,
         l2_voltage_drop_pct=loop._state.l2_voltage_drop_pct if ev_ok else None,
         l3_voltage_drop_pct=loop._state.l3_voltage_drop_pct if ev_ok else None,

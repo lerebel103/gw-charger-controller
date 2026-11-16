@@ -13,16 +13,19 @@ from app.control.constants import (
     _STOP_PRESET_W,
 )
 from app.control.mode_strategies import clamp_eco_day_to_applied, compute_setpoint
-from app.control.power_utils import record_samples
+from app.control.power_utils import ev_soc_is_fresh, record_samples, resolve_ev_soc
 from app.control.protocols import VictronClientProtocol
 from app.control.snapshot import build_snapshot
+from app.control.soc_estimator import AnchorOrigin, KLearnResult, SocEstimator, SocSource, effective_k
 from app.control.state_machine import (
     ChargingStateMachine,
 )
+from app.log_throttle import LogThrottle
 from app.modbus import EVChargerModbusClient
 from app.state import AppState, ChargeModeState, ChargeSessionState
 
 logger = logging.getLogger(__name__)
+_throttle = LogThrottle(logger, suppress_seconds=60.0)
 
 
 class ControlLoop:
@@ -62,6 +65,9 @@ class ControlLoop:
         self._phase_samples: list[list[PhaseSample]] = [[], [], []]
         self._prev_ev_fresh: bool = True
         self._breaker = BreakerLimiterState()
+        self._soc_estimator = SocEstimator()
+        self._soc_was_stalled: bool = False
+        self._soc_discontinuities_seen: int = 0
         self._state_machine = ChargingStateMachine(self)
 
     async def _apply_ev_output(self, setpoint: float, suppress_ev_writes: bool) -> None:
@@ -79,6 +85,71 @@ class ControlLoop:
         await self._ev_client.write_setpoint(_STOP_PRESET_W)
         if self._state_machine.should_send_stop_command(setpoint):
             await self._ev_client.stop_charging()
+
+    def _apply_k_result(self, k_prev: float, result: KLearnResult) -> None:
+        """Store a refined k with its capacity and schedule persistence."""
+        state = self._state
+        if abs(result.k_new - k_prev) < 1e-4 and state.ev_soc_k_capacity_kwh == state.ev_battery_capacity_kwh:
+            return
+        state.ev_soc_k = result.k_new
+        state.ev_soc_k_capacity_kwh = state.ev_battery_capacity_kwh
+        logger.debug("EV SOC k refined: span %.4f, k %.4f -> %.4f", result.k_span, k_prev, result.k_new)
+        if self._config_manager is not None:
+            self._config_manager.schedule_persist(state)
+
+    def _update_soc_estimator(self) -> None:
+        """Feed the SOC estimator and log stall, estimate-used and missing-SOC transitions."""
+        state = self._state
+        estimator = self._soc_estimator
+        k_prev = effective_k(state)
+        k_result = estimator.observe(
+            soc_pct=state.ev_soc_pct,
+            soc_fresh=ev_soc_is_fresh(self),
+            energy_wh=state.ev_session_energy_wh,
+            capacity_kwh=state.ev_battery_capacity_kwh,
+            k=k_prev,
+        )
+        if k_result is not None:
+            self._apply_k_result(k_prev, k_result)
+        if estimator.discontinuities != self._soc_discontinuities_seen:
+            self._soc_discontinuities_seen = estimator.discontinuities
+            _throttle.warning(
+                "soc_energy_discontinuity", "EV session energy jumped; ignoring the step for SOC estimate"
+            )
+
+        resolution = resolve_ev_soc(self)
+        if resolution.stalled and not self._soc_was_stalled:
+            _throttle.warning(
+                "soc_stalled",
+                "EV SOC report looks stalled (reported %.1f%%, estimated %.1f%%); using the estimate",
+                resolution.reported_pct,
+                resolution.estimated_pct,
+            )
+        elif not resolution.stalled and self._soc_was_stalled:
+            _throttle.clear("soc_stalled")
+            logger.info("EV SOC report updated again; stall cleared")
+        self._soc_was_stalled = resolution.stalled
+
+        if resolution.source is SocSource.ESTIMATED:
+            _throttle.warning(
+                "soc_estimate_used", "EV SOC estimated from session energy: %.1f%%", resolution.effective_pct
+            )
+            anchor = estimator.anchor
+            if anchor is not None and anchor.origin is AnchorOrigin.LAST_KNOWN:
+                _throttle.warning(
+                    "soc_last_known_anchor",
+                    "EV SOC estimate anchored on last known SOC %.1f%% (no SOC reported this plug-in)",
+                    anchor.soc_pct,
+                )
+        else:
+            _throttle.clear("soc_estimate_used")
+
+        if resolution.source is SocSource.NONE and (state.ev_active_power_w or 0) > 0:
+            _throttle.warning(
+                "soc_unavailable_charging", "EV is charging but no SOC is available (reported or estimated)"
+            )
+        else:
+            _throttle.clear("soc_unavailable_charging")
 
     async def run_loop(self) -> None:
         """Master control loop: read -> compute -> write -> publish."""
@@ -109,8 +180,10 @@ class ControlLoop:
 
             if self._state.ev_connected and self._prev_ev_connected is not True:
                 logger.info("EV vehicle connected")
+                self._soc_estimator.begin_session()
             elif not self._state.ev_connected and self._prev_ev_connected is not False:
                 logger.info("EV vehicle disconnected")
+                self._soc_estimator.end_session()
                 self._eco_charging = False
                 self._eco_day_battery_full = False
                 if self._state.ev_max_soc_pct != _EV_MAX_SOC_DEFAULT:
@@ -123,6 +196,8 @@ class ControlLoop:
                     self._config_manager.schedule_persist(self._state)
                 self._publish_queue.put_nowait("republish_config")
             self._prev_ev_connected = self._state.ev_connected
+
+            self._update_soc_estimator()
 
             setpoint = compute_setpoint(self)
             setpoint = self._state_machine.apply_charging_events(setpoint)

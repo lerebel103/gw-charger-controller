@@ -4,17 +4,22 @@ from __future__ import annotations
 
 import time as _time
 
+import pytest
+
 from app.control.constants import _MAX_CHARGE_W, _MIN_CHARGE_W
 from app.control.power_utils import (
     clamp,
     compute_grid_fallback_setpoint,
+    ev_soc_is_fresh,
     get_ev_soc,
     limit_battery_discharge,
     mean_battery_power,
     mean_grid_power,
     prune_samples,
     record_samples,
+    resolve_ev_soc,
 )
+from app.control.soc_estimator import SocSource
 from app.state import AppState
 from tests.unit.helpers import make_ns_loop
 
@@ -39,6 +44,34 @@ class TestGetEvSoc:
         loop = make_ns_loop(state)
 
         assert get_ev_soc(loop) is None
+
+
+class TestGetEvSocEstimator:
+    def _loop(self, *, age_s: float):
+        state = AppState(ev_soc_pct=40.0)
+        state.ev_soc_pct_updated_at = _time.monotonic() - age_s
+        loop = make_ns_loop(state)
+        loop._soc_estimator.observe(soc_pct=40.0, soc_fresh=True, energy_wh=0.0)
+        loop._soc_estimator.observe(soc_pct=None, soc_fresh=False, energy_wh=820.0)
+        return loop
+
+    def test_is_fresh(self):
+        assert ev_soc_is_fresh(self._loop(age_s=0.0))
+        assert not ev_soc_is_fresh(self._loop(age_s=10_000.0))
+        assert not ev_soc_is_fresh(make_ns_loop(AppState()))
+
+    def test_stale_with_anchor_returns_estimate(self):
+        loop = self._loop(age_s=10_000.0)
+        assert get_ev_soc(loop) == 41.0
+        assert resolve_ev_soc(loop).source is SocSource.ESTIMATED
+
+    def test_fresh_with_anchor_returns_reported(self):
+        assert get_ev_soc(self._loop(age_s=0.0)) == 40.0
+
+    def test_stalled_report_returns_estimate(self):
+        loop = self._loop(age_s=0.0)
+        loop._soc_estimator.observe(soc_pct=None, soc_fresh=False, energy_wh=2000.0)
+        assert get_ev_soc(loop) == pytest.approx(40.0 + 2000.0 / 820.0)
 
 
 class TestRollingSamples:

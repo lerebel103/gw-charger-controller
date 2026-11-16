@@ -35,6 +35,7 @@ COMMAND_MAP: dict[str, tuple[str, str]] = {
     f"{PREFIX}/switch/plug_and_charge_auto_start/set": ("ev_plug_and_charge_auto_start", "switch"),
     f"{PREFIX}/switch/single_phase_switching/set": ("ev_single_phase_switching", "switch"),
     f"{PREFIX}/switch/eco_day_min_charge/set": ("eco_day_min_charge_enabled", "switch"),
+    f"{PREFIX}/switch/charge_to_max_soc/set": ("charge_to_max_soc_enabled", "switch"),
     f"{PREFIX}/number/manual_power/set": ("manual_power_w", "float"),
     f"{PREFIX}/number/ev_min_soc/set": ("ev_min_soc_pct", "float"),
     f"{PREFIX}/number/ev_max_soc/set": ("ev_max_soc_pct", "float"),

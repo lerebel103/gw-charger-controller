@@ -97,6 +97,18 @@ Payload: 72
 
 Automate this from your car integration in Home Assistant. If no update arrives within 5 minutes, SOC is treated as unavailable.
 
+### SOC estimator (stalled or missing reports)
+
+The car's cloud API sometimes stops publishing while Home Assistant keeps republishing the last value, so the app cannot tell the SOC is frozen. The app therefore also estimates the SOC from the charger's session energy: `estimated = anchor SOC + energy delivered since the anchor / (battery capacity x k) x 100`. The anchor is the last reported SOC value that actually changed. `k` (charger-side energy per battery energy, about 1.01 for the recorded car) starts at 1.0 and is refined during each charge from the reported SOC steps, then saved in `config.yaml` together with the capacity it belongs to. Changing the battery capacity discards it.
+
+- **Healthy**: the reported SOC is used.
+- **Stalled** (the estimate is more than 1.5 percentage points above the report) or **stale** (no update for 5 minutes): the estimate is used by the normal control path (min SOC floor, eco night, max SOC stop, fallback setpoint).
+- **No SOC at all**: behaves as before (no SOC based decisions) and logs a throttled warning.
+- **Charge to set max SoC** switch (HA, default ON, saved in `config.yaml`): when OFF in Manual or Eco, the max SOC target (reported or estimated) never stops or blocks a session, for example for a second car whose SOC is unknown. Start conditions, ramp and every other stop reason are unchanged, and the estimator sensors keep publishing.
+- **Max SOC stop**: a stop with reason `max_soc_reached` (reported SOC at the limit) or `max_soc_estimated` (estimate at the limit; 0.5 percentage points early when the estimate is the SOC source). The configured Max EV SOC stays authoritative, so temporarily raising it to 100 % for a long trip works.
+
+Home Assistant diagnostics: `EV SOC (estimated)`, `EV SOC Source` (`reported`, `estimated`, `none`), `EV SOC Stalled` and `EV SOC Efficiency (k)`. The `EV SOC` sensor publishes the effective SOC. Charging `stopped` events carry `soc_source`. Details, constants and risks: [docs/soc-estimator.md](docs/soc-estimator.md).
+
 ## Development
 
 ```bash
@@ -118,7 +130,7 @@ See [AGENTS.md](AGENTS.md) for architecture details and module responsibilities.
 Project knowledge for AI agents (Kiro) is committed under `.kiro/`:
 
 - **Steering** (`.kiro/steering/`): `domain-conventions.md` (signs, units, timezone), `design-decisions.md` (eco ramp decisions and charger register facts), `dev-workflow.md` (verification commands, git rules).
-- **Skills** (`.kiro/skills/`): `incident-replay`, `modbus-register`, `release`, `pr-feedback`.
+- **Skills** (`.kiro/skills/`): `incident-replay`, `ev-soc-estimator`, `modbus-register`, `release`, `pr-feedback`.
 - **Workflow recipes** (`.kiro/workflows/`): `investigate-incident` and `fix-with-replay`.
 - **Hook** (`.kiro/hooks/block-commit-on-main.json`): blocks `git commit` and `git push` while on `main`.
 
