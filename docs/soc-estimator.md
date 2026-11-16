@@ -49,6 +49,7 @@ All consumers get the effective value through `get_ev_soc`: the min SOC floor, e
 - An app restart mid-charge loses the anchor and the last known SOC. The first value received afterwards becomes the anchor. If the report was already frozen, the estimate starts from the frozen value.
 - Cloud lag makes the change anchor late, so the estimate runs slightly low (about 0.1 % per minute at 4.4 kW). The margin and the stall tolerance absorb it.
 - At 22 kW with a 6 minute cloud cadence one update gap is about 2.2 kWh, which exceeds the stall tolerance. The stalled flag can then flap. This is harmless because the estimate is accurate to about 1 point, and the tolerance can be raised.
+- Known limitation: a session-energy reset missed during Standby or an EV-read outage is undetectable when the recovered counter is at or above the old one. Energy delivered before the recovery read is then undercounted (for example 2,000 Wh then 8,200 Wh counts 6,200 Wh), so the estimate runs low and the stop lands later than the limit. This needs a missed reset plus a larger recovered counter. It is accepted: a small overshoot is acceptable, and there is no lifetime-register reconciliation.
 - The estimate needs the charger's session energy. Without it no estimate exists and behaviour is as before.
 ## Validation
 Checked against `history-22` (three real sessions, 82 kWh) with simulated freeze and stale outages, warm and cold anchors, and a cross-check through `ControlLoop.run_loop` (36 ad hoc cases matched; six are kept as tests).
