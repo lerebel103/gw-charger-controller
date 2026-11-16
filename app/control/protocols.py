@@ -15,6 +15,7 @@ from collections.abc import Awaitable
 from typing import Protocol
 
 from app.control.breaker_state import BreakerLimiterState, PhaseSample
+from app.control.soc_estimator import SocEstimator
 from app.state import AppState, ChargeModeState, ChargeSessionState
 
 
@@ -42,6 +43,7 @@ class SamplingLoopProtocol(Protocol):
     _battery_power_samples: list[tuple[float, float]]
     _phase_samples: list[list[PhaseSample]]
     _breaker: BreakerLimiterState
+    _soc_estimator: SocEstimator
 
 
 class ModeLoopProtocol(SamplingLoopProtocol, Protocol):
@@ -62,6 +64,7 @@ class SnapshotLoopProtocol(Protocol):
 
     _state: AppState
     _start_time: float
+    _soc_estimator: SocEstimator
 
 
 class SessionLoopProtocol(Protocol):

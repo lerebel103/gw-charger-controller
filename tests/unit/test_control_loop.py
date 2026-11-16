@@ -1499,3 +1499,91 @@ class TestStandbyExitReconnect:
         # Should NOT reconnect while still in standby
         ev.reconnect.assert_not_awaited()
         assert cl._standby_write_quiet is True
+
+
+class TestEvSocEstimatorWiring:
+    """The energy estimate feeds the normal control path when the reported SOC is frozen or stale."""
+
+    @staticmethod
+    def _loop(*, age_s: float, delivered_wh: float, anchor_soc: float = 70.0, **state_kw):
+        state = AppState(ev_connected=True, ev_soc_pct=anchor_soc, **state_kw)
+        state.ev_soc_pct_updated_at = _time.monotonic() - age_s
+        cl = make_control_loop(state)
+        cl._soc_estimator.observe(soc_pct=anchor_soc, soc_fresh=True, energy_wh=0.0)
+        done = 0.0
+        while done < delivered_wh:
+            done = min(done + 1000.0, delivered_wh)
+            cl._soc_estimator.observe(soc_pct=None, soc_fresh=False, energy_wh=done)
+        return cl
+
+    def test_frozen_report_stops_with_max_soc_estimated(self):
+        cl = self._loop(
+            age_s=0.0, delivered_wh=7800.0, charge_mode="Manual", manual_power_w=7000.0, ev_max_soc_pct=80.0
+        )
+        assert cl._state_machine.determine_stop_reason() == "max_soc_estimated"
+        assert compute_setpoint(cl) == 0.0
+
+    def test_frozen_report_below_limit_keeps_charging(self):
+        cl = self._loop(
+            age_s=0.0, delivered_wh=3000.0, charge_mode="Manual", manual_power_w=7000.0, ev_max_soc_pct=80.0
+        )
+        assert compute_setpoint(cl) == 7000.0
+
+    def test_stale_report_stops_with_estimate(self):
+        cl = self._loop(
+            age_s=10_000.0, delivered_wh=7800.0, charge_mode="Manual", manual_power_w=7000.0, ev_max_soc_pct=80.0
+        )
+        assert compute_setpoint(cl) == 0.0
+
+    def test_stopped_event_has_soc_source(self):
+        cl = self._loop(age_s=10_000.0, delivered_wh=7800.0, charge_mode="Manual", ev_max_soc_pct=80.0)
+        cl._charging_session_state = ChargeSessionState.STOPPED_PENDING
+        cl._stopped_at = _time.monotonic() - 60
+        cl._stopping_reason = "max_soc_estimated"
+        cl._state_machine.apply_charging_events(0.0)
+        events = []
+        while not cl._publish_queue.empty():
+            item = cl._publish_queue.get_nowait()
+            if isinstance(item, dict) and item.get("event") == "stopped":
+                events.append(item)
+        assert len(events) == 1
+        assert events[0]["reason"] == "max_soc_estimated"
+        assert events[0]["soc_source"] == "estimated"
+        assert events[0]["ev_soc_pct"] == pytest.approx(70.0 + 7800.0 / 820.0)
+
+    def test_min_charge_floor_uses_estimate_when_stale(self):
+        from app.control.mode_strategies import min_charge_floor_active
+
+        cl = self._loop(
+            age_s=10_000.0, delivered_wh=4100.0, anchor_soc=30.0, eco_day_min_charge_enabled=True, ev_min_soc_pct=40.0
+        )
+        assert min_charge_floor_active(cl)  # estimate 35 < 40
+        cl2 = self._loop(
+            age_s=10_000.0, delivered_wh=9000.0, anchor_soc=30.0, eco_day_min_charge_enabled=True, ev_min_soc_pct=40.0
+        )
+        assert not min_charge_floor_active(cl2)  # estimate 41 >= 40
+
+    def test_eco_night_fallback_uses_estimate_when_stale(self):
+        cl = self._loop(
+            age_s=10_000.0,
+            delivered_wh=4100.0,
+            anchor_soc=30.0,
+            charge_mode="Eco",
+            ev_min_soc_pct=40.0,
+            solar_battery_soc_pct=20.0,
+            solar_battery_power_w=0.0,
+            solar_battery_discharge_floor_pct=20.0,
+        )
+        assert setpoint_eco_night(cl) >= _MIN_CHARGE_W
+        assert cl._charge_mode_state.name == "ECO_NIGHT_GRID_FALLBACK"
+
+    def test_update_estimator_logs_and_tracks_stall(self, caplog):
+        state = AppState(ev_connected=True, ev_soc_pct=40.0, ev_session_energy_wh=0.0)
+        state.ev_soc_pct_updated_at = _time.monotonic()
+        cl = make_control_loop(state)
+        cl._update_soc_estimator()
+        state.ev_session_energy_wh = 2000.0
+        with caplog.at_level("INFO"):
+            cl._update_soc_estimator()
+        assert cl._soc_was_stalled
+        assert "stalled" in caplog.text

@@ -6,7 +6,6 @@ from abc import ABC, abstractmethod
 
 from app.control.constants import (
     _ECO_DAY_COOLDOWN_S,
-    _EV_MAX_SOC_MARGIN_PCT,
     _MAX_CHARGE_W,
     _MIN_CHARGE_W,
     _RAMP_DEADBAND_W,
@@ -16,6 +15,7 @@ from app.control.power_utils import (
     compute_grid_fallback_setpoint,
     get_ev_soc,
     limit_battery_discharge,
+    max_soc_stop_reason,
     mean_battery_power,
     mean_grid_power,
 )
@@ -321,9 +321,7 @@ def resolve_mode_handler(loop: ModeLoopProtocol) -> ModeSetpointHandler:
     if not loop._state.ev_connected or not loop._state.ev_comm_healthy:
         return _NO_VEHICLE_HANDLER
 
-    ev_soc = get_ev_soc(loop)
-    margin = _EV_MAX_SOC_MARGIN_PCT if loop._state.ev_max_soc_pct >= 100.0 else 0.0
-    if ev_soc is not None and ev_soc >= (loop._state.ev_max_soc_pct - margin):
+    if max_soc_stop_reason(loop) is not None:
         return _MAX_SOC_BLOCKED_HANDLER
 
     if mode == "Manual":

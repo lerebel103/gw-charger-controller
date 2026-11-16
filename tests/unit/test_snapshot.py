@@ -12,6 +12,7 @@ import time
 import types
 
 from app.control.snapshot import build_snapshot
+from app.control.soc_estimator import SocEstimator
 from app.state import (
     AdvancedChargingMode,
     AppState,
@@ -23,7 +24,7 @@ from app.state import (
 
 def _loop(state: AppState) -> types.SimpleNamespace:
     """Minimal SnapshotLoopProtocol stub (``_state`` + ``_start_time``)."""
-    return types.SimpleNamespace(_state=state, _start_time=0.0)
+    return types.SimpleNamespace(_state=state, _start_time=0.0, _soc_estimator=SocEstimator())
 
 
 def _populate_ev_fields(state: AppState) -> None:
@@ -156,3 +157,48 @@ class TestBuildSnapshotEVCommsHealthy:
         assert snapshot.ev_charger_status_display == ChargerStatus.CHARGING_IN_PROGRESS.display_name
         assert snapshot.ev_comm_wifi_router_connected is True
         assert snapshot.ev_soc_pct == 42.0
+
+
+class TestBuildSnapshotSocEstimator:
+    def test_fields_come_from_one_resolve_and_survive_an_ev_outage(self):
+        state = AppState()
+        state.ev_comm_healthy = False
+        state.ev_soc_pct = 42.0
+        state.ev_soc_pct_updated_at = time.monotonic()
+        state.ev_soc_k = 1.0123
+        state.ev_soc_k_capacity_kwh = state.ev_battery_capacity_kwh
+        loop = _loop(state)
+        loop._soc_estimator.observe(soc_pct=42.0, soc_fresh=True, energy_wh=0.0)
+        loop._soc_estimator.observe(soc_pct=42.0, soc_fresh=True, energy_wh=820.0)
+
+        snapshot = build_snapshot(loop)
+
+        assert snapshot.ev_soc_pct == 42.0
+        assert snapshot.ev_soc_estimated_pct is not None
+        assert 42.9 < snapshot.ev_soc_estimated_pct < 43.1
+        assert snapshot.ev_soc_source == "reported"
+        assert snapshot.ev_soc_stalled is False
+        assert snapshot.ev_soc_k == 1.0123
+
+    def test_stalled_report_publishes_the_estimate_as_effective_soc(self):
+        state = AppState()
+        state.ev_soc_pct = 42.0
+        state.ev_soc_pct_updated_at = time.monotonic()
+        loop = _loop(state)
+        loop._soc_estimator.observe(soc_pct=42.0, soc_fresh=True, energy_wh=0.0)
+        loop._soc_estimator.observe(soc_pct=42.0, soc_fresh=True, energy_wh=2500.0)
+
+        snapshot = build_snapshot(loop)
+
+        assert snapshot.ev_soc_stalled is True
+        assert snapshot.ev_soc_source == "estimated"
+        assert snapshot.ev_soc_pct == snapshot.ev_soc_estimated_pct
+
+    def test_no_soc_gives_source_none_and_default_k(self):
+        snapshot = build_snapshot(_loop(AppState()))
+
+        assert snapshot.ev_soc_pct is None
+        assert snapshot.ev_soc_estimated_pct is None
+        assert snapshot.ev_soc_source == "none"
+        assert snapshot.ev_soc_stalled is False
+        assert snapshot.ev_soc_k == 1.0

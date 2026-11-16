@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 from app.control.breaker_state import BreakerLimiterState
 from app.control.constants import _MIN_CHARGE_W
 from app.control.loop import ControlLoop
+from app.control.soc_estimator import SocEstimator
 from app.state import AppState, ChargeModeState, ChargeSessionState
 
 
@@ -51,6 +52,7 @@ def make_ns_loop(state: AppState, *, victron_connected: bool = True, **overrides
         _battery_power_samples=[],
         _phase_samples=[[], [], []],
         _breaker=BreakerLimiterState(),
+        _soc_estimator=SocEstimator(),
         _start_time=_time.monotonic(),
     )
     for key, value in overrides.items():

@@ -282,11 +282,14 @@ async def run_scenario(
     on_cycle: Callable[[int, AppState, ControlLoop], None] | None = None,
     cycle_s: float = CYCLE_S,
     night: bool = False,
+    soc_republish: Callable[[int], bool] | None = None,
 ) -> Result:
     """Run ``n_cycles`` iterations of ControlLoop.run_loop and record one CycleRecord per cycle.
 
     ``car`` models the EV (closed loop); ``ev_fields(i, state)`` instead feeds recorded EV values (open loop).
     ``night`` selects the Eco night (discharge) window instead of Eco day.
+    ``soc_republish(i)`` returning False skips the ``ev_soc_pct_updated_at`` re-stamp in cycle ``i`` (a dead
+    integration: the value stays but goes stale). The default re-stamps every cycle, like HA republishing.
     ``cycle_s`` is the fake-clock advance per cycle (the real loop period is the interval plus Modbus time).
     """
     clock = FakeClock()
@@ -341,6 +344,8 @@ async def run_scenario(
         for key, value in site(cycle_no["i"], car_out["power"]).items():
             setattr(state, key, value)
         if state.ev_soc_pct is not None and ev_soc_pct is not None:
+            if soc_republish is not None and not soc_republish(cycle_no["i"]):
+                return
             state.ev_soc_pct_updated_at = clock()
 
     victron.read = AsyncMock(side_effect=victron_read)

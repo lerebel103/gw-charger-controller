@@ -436,6 +436,67 @@ class TestMQTTDiscovery:
                 assert "expire_after" not in payload
 
 
+class TestSocEstimatorEntities:
+    @pytest.mark.asyncio
+    async def test_discovery_lists_the_four_estimator_entities(self):
+        client = MQTTClient(state=AppState(), config_manager=MagicMock(), publish_queue=asyncio.Queue())
+        client._client = AsyncMock()
+        await client._publish_discovery()
+        calls = {c.args[0]: json.loads(c.args[1]) for c in client._client.publish.await_args_list if c.args[1]}
+
+        estimated = calls["homeassistant/sensor/ev_charger_soc_estimated/config"]
+        assert estimated["state_topic"] == "ev_charger/sensor/ev_soc_estimated/state"
+        assert estimated["unit_of_measurement"] == "%"
+        assert estimated["entity_category"] == "diagnostic"
+        source = calls["homeassistant/sensor/ev_charger_soc_source/config"]
+        assert source["state_topic"] == "ev_charger/sensor/ev_soc_source/state"
+        assert source["device_class"] == "enum"
+        assert source["options"] == ["reported", "estimated", "none"]
+        k = calls["homeassistant/sensor/ev_charger_soc_k/config"]
+        assert k["state_topic"] == "ev_charger/sensor/ev_soc_k/state"
+        assert k["entity_category"] == "diagnostic"
+        stalled = calls["homeassistant/binary_sensor/ev_charger_soc_stalled/config"]
+        assert stalled["state_topic"] == "ev_charger/binary_sensor/ev_soc_stalled/state"
+        assert stalled["device_class"] == "problem"
+
+    @pytest.mark.asyncio
+    async def test_state_topics_publish_effective_soc_and_estimator_values(self):
+        client = MQTTClient(state=AppState(), config_manager=MagicMock(), publish_queue=asyncio.Queue())
+        client._client = AsyncMock()
+        snapshot = StateSnapshot(
+            ev_soc_pct=44.5,
+            ev_soc_estimated_pct=44.5,
+            ev_soc_source="estimated",
+            ev_soc_stalled=True,
+            ev_soc_k=1.0123456,
+        )
+
+        await client._publish_state(snapshot)
+        published = _published(client._client)
+
+        assert published["ev_charger/sensor/ev_soc/state"] == "44.5"
+        assert published["ev_charger/sensor/ev_soc_estimated/state"] == "44.5"
+        assert published["ev_charger/sensor/ev_soc_source/state"] == "estimated"
+        assert published["ev_charger/binary_sensor/ev_soc_stalled/state"] == "ON"
+        assert published["ev_charger/sensor/ev_soc_k/state"] == "1.0123"
+
+    @pytest.mark.asyncio
+    async def test_none_values_are_skipped(self):
+        client = MQTTClient(state=AppState(), config_manager=MagicMock(), publish_queue=asyncio.Queue())
+        client._client = AsyncMock()
+
+        await client._publish_state(StateSnapshot())
+        published = _published(client._client)
+
+        for topic in (
+            "ev_charger/sensor/ev_soc_estimated/state",
+            "ev_charger/sensor/ev_soc_source/state",
+            "ev_charger/sensor/ev_soc_k/state",
+            "ev_charger/binary_sensor/ev_soc_stalled/state",
+        ):
+            assert topic not in published
+
+
 class TestMaxGridPowerDrawRemoved:
     @pytest.mark.asyncio
     async def test_max_power_entities_not_discovered_and_topics_cleared(self):
