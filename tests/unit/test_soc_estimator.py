@@ -247,6 +247,13 @@ class TestSessions:
         assert est.anchor is None
         assert _resolve(est, None, fresh=False).source is SocSource.NONE
 
+    def test_begin_session_without_energy_baseline_has_no_anchor(self):
+        est = SocEstimator()
+        est.observe(soc_pct=70.0, soc_fresh=True, energy_wh=None)
+        est.begin_session()
+        assert est.anchor is None
+        assert _resolve(est, None, fresh=False).source is SocSource.NONE
+
 
 class TestEffectiveK:
     def test_default_without_learned_k(self):

@@ -213,7 +213,7 @@ class SocEstimator:
         Without one, fall back to the last known reported SOC. A changed report supersedes either.
         """
         self._span_first = None
-        if self._anchor is None and self._last_known_soc_pct is not None:
+        if self._anchor is None and self._last_known_soc_pct is not None and self._prev_energy_wh is not None:
             self._anchor = Anchor(self._last_known_soc_pct, self._acc_wh, AnchorOrigin.LAST_KNOWN)
 
     def end_session(self) -> None:
