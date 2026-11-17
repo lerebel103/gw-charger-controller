@@ -1,6 +1,6 @@
 """Payload parsing helpers for Home Assistant runtime commands."""
 
-from app.state import AdvancedChargingMode, PlugAndChargeAutoStart, SinglePhaseSwitching
+from app.state import AdvancedChargingMode, EmsEnergyDispatch, PlugAndChargeAutoStart, SinglePhaseSwitching
 
 
 def parse_advanced_mode_payload(payload: str) -> AdvancedChargingMode | None:
@@ -63,3 +63,19 @@ def parse_single_phase_payload(payload: str) -> SinglePhaseSwitching | None:
     except TypeError, ValueError:
         return None
     return SinglePhaseSwitching.from_register(raw)
+
+
+def parse_ems_dispatch_payload(payload: str) -> EmsEnergyDispatch | None:
+    """Parse EMS energy dispatch payload (register 10000) from HA switch text or numeric 0/1."""
+    payload_clean = str(payload).strip()
+    mode = EmsEnergyDispatch.from_switch_payload(payload_clean.upper())
+    if mode is not None:
+        return mode
+    try:
+        raw = int(payload_clean)
+    except TypeError, ValueError:
+        return None
+    mode = EmsEnergyDispatch.from_register(raw)
+    if mode in (None, EmsEnergyDispatch.UNKNOWN):
+        return None
+    return mode

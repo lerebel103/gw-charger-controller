@@ -74,6 +74,8 @@ def build_snapshot(loop: SnapshotLoopProtocol) -> StateSnapshot:
         victron_l2_current_a=loop._state.victron_l2_current_a,
         victron_l3_current_a=loop._state.victron_l3_current_a,
         commanded_setpoint_w=loop._state.commanded_setpoint_w,
+        ev_charger_setpoint_raw=loop._state.ev_charger_setpoint_raw if ev_ok else None,
+        ev_setpoint_write_status=loop._state.ev_setpoint_write_status,
         uptime_s=round(_time.monotonic() - loop._start_time),
         timestamp=datetime.now(),  # noqa: DTZ005
     )

@@ -202,3 +202,43 @@ class SinglePhaseSwitching(IntEnum):
         if value == "OFF":
             return cls.DISABLED
         return None
+
+
+class EmsEnergyDispatch(IntEnum):
+    """GW22K-HCA-20 EMS energy dispatch (register 10000, RW, U16, range [0,1], not saved to flash).
+
+    Spec (HCA.G2.modbus.file.pdf): 1 = adjust the charging station's power to the minimum for
+    charging, 0 = normal operation. HA switch mapping (ASSUMPTION, flagged for the user): ON = 1.
+    """
+
+    NORMAL = 0
+    MINIMUM_POWER = 1
+    UNKNOWN = 255
+
+    @classmethod
+    def from_register(cls, value: int | None) -> Self | None:
+        """Convert register value to EmsEnergyDispatch enum."""
+        if value is None:
+            return None
+        try:
+            return cls(value)
+        except ValueError:
+            return cls.UNKNOWN
+
+    @property
+    def display_name(self) -> str:
+        names = {
+            0: "Normal",
+            1: "Minimum power",
+            255: "Unknown",
+        }
+        return names.get(self.value, f"Unknown ({self.value})")
+
+    @classmethod
+    def from_switch_payload(cls, value: str) -> Self | None:
+        """Map Home Assistant switch payload to enum value."""
+        if value == "ON":
+            return cls.MINIMUM_POWER
+        if value == "OFF":
+            return cls.NORMAL
+        return None

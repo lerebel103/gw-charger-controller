@@ -382,3 +382,36 @@ class TestEcoNightMinChargeFloor:
         loop, _ = _night_loop(ev_soc=55.0, home_soc=16.0, battery_w=0.0)
         assert EcoNightModeHandler().compute(loop) == 0.0
         assert loop._state_machine.mode_state == ChargeModeState.ECO_NIGHT_FLOOR_STOP
+
+
+class TestDiagSwitchDoesNotAffectEco:
+    def test_eco_day_min_charge_floor_unchanged_with_switch_on(self):
+        state = AppState(
+            ev_connected=True,
+            charge_mode="Eco",
+            eco_day_min_charge_enabled=True,
+            ev_min_soc_pct=50.0,
+            ev_soc_pct=30.0,
+            solar_battery_soc_pct=95.0,
+            solar_battery_discharge_start="23:00",
+            solar_battery_discharge_end="06:00",
+            manual_power_w=1500.0,
+            diag_low_setpoint_enabled=True,
+        )
+        state.ev_soc_pct_updated_at = _time.monotonic()
+        loop = make_ns_loop(state)
+        assert EcoDayModeHandler().compute(loop) >= _MIN_CHARGE_W
+
+    def test_eco_night_floor_unchanged_with_switch_on(self):
+        state = AppState(
+            ev_connected=True,
+            charge_mode="Eco",
+            eco_day_min_charge_enabled=True,
+            ev_min_soc_pct=50.0,
+            ev_soc_pct=30.0,
+            solar_battery_max_ev_charge_power_w=1500.0,
+            diag_low_setpoint_enabled=True,
+        )
+        state.ev_soc_pct_updated_at = _time.monotonic()
+        loop = make_ns_loop(state)
+        assert EcoNightModeHandler().compute(loop) >= _MIN_CHARGE_W

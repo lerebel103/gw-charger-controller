@@ -8,7 +8,14 @@ import pytest
 
 from app.modbus import EVChargerModbusClient
 from app.modbus.ev import compute_ev_power_w, ev_is_actively_charging
-from app.state import AdvancedChargingMode, AppState, ChargerStatus, PlugAndChargeAutoStart, SinglePhaseSwitching
+from app.state import (
+    AdvancedChargingMode,
+    AppState,
+    ChargerStatus,
+    EmsEnergyDispatch,
+    PlugAndChargeAutoStart,
+    SinglePhaseSwitching,
+)
 
 # ---------------------------------------------------------------------------
 # Helper: build a fake Modbus response
@@ -476,6 +483,108 @@ class TestEVChargerModbusClient:
 
         mock_client.write_register.assert_called_once_with(address=10029, value=44, device_id=247)
 
+    def _diag_client(self, *, diag: bool = True, heartbeat: bool = False, readback: int | None = None):
+        state = self._make_state(diag_low_setpoint_enabled=diag, diag_setpoint_heartbeat_enabled=heartbeat)
+        state.ev_connected = True
+        state.ev_charger_setpoint_raw = readback
+        ec = EVChargerModbusClient(state)
+        mock_client = AsyncMock()
+        mock_client.connected = True
+        mock_client.write_register = AsyncMock(return_value=_make_response([]))
+        ec._client = mock_client
+        return state, ec, mock_client
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("watts", "raw"), [(1400, 14), (1500, 15), (1600, 16), (4200, 42), (4300, 43)])
+    async def test_write_setpoint_diag_low_verbatim(self, watts, raw):
+        state, ec, mock_client = self._diag_client()
+        assert await ec.write_setpoint(watts) is True
+        mock_client.write_register.assert_called_once_with(address=10029, value=raw, device_id=247)
+        assert state.ev_setpoint_write_status == f"OK raw={raw} ({raw * 100} W)"
+
+    @pytest.mark.asyncio
+    async def test_write_setpoint_diag_below_register_min_uses_14(self):
+        _, ec, mock_client = self._diag_client()
+        await ec.write_setpoint(500)
+        mock_client.write_register.assert_called_once_with(address=10029, value=14, device_id=247)
+
+    @pytest.mark.asyncio
+    async def test_write_setpoint_diag_off_still_raises_to_44(self):
+        _, ec, mock_client = self._diag_client(diag=False)
+        await ec.write_setpoint(1500)
+        mock_client.write_register.assert_called_once_with(address=10029, value=44, device_id=247)
+
+    @pytest.mark.asyncio
+    async def test_write_setpoint_low_logs_info(self, caplog):
+        _, ec, _ = self._diag_client()
+        with caplog.at_level("INFO", logger="app.modbus.ev"):
+            await ec.write_setpoint(1500)
+        assert any(
+            r.levelname == "INFO"
+            and "10029" in r.getMessage()
+            and "raw=15" in r.getMessage()
+            and "1500 W" in r.getMessage()
+            for r in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_write_setpoint_low_rejection_is_surfaced_not_clamped(self, caplog):
+        state, ec, mock_client = self._diag_client()
+        mock_client.write_register = AsyncMock(return_value=_make_error_response())
+        with caplog.at_level("WARNING", logger="app.modbus.ev"):
+            assert await ec.write_setpoint(1500) is False
+        mock_client.write_register.assert_called_once_with(address=10029, value=15, device_id=247)
+        assert state.ev_setpoint_write_status.startswith("FAILED raw=15")
+        assert any(r.levelname == "WARNING" and "raw=15" in r.getMessage() for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_rewrites_equal_value_every_10s(self):
+        _, ec, mock_client = self._diag_client(heartbeat=True)
+        with patch("app.modbus.ev._t.monotonic") as mono:
+            mono.return_value = 1000.0
+            await ec.write_setpoint(1500)
+            assert mock_client.write_register.await_count == 1
+            mono.return_value = 1005.0
+            await ec.write_setpoint(1500)
+            assert mock_client.write_register.await_count == 1
+            mono.return_value = 1010.0
+            await ec.write_setpoint(1500)
+            assert mock_client.write_register.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_no_heartbeat_when_flag_off(self):
+        _, ec, mock_client = self._diag_client(heartbeat=False)
+        with patch("app.modbus.ev._t.monotonic") as mono:
+            mono.return_value = 1000.0
+            await ec.write_setpoint(1500)
+            mono.return_value = 1100.0
+            await ec.write_setpoint(1500)
+        assert mock_client.write_register.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_flash_guard_limits_rewrites_when_charger_reads_back_other_value(self):
+        state, ec, mock_client = self._diag_client()
+        with patch("app.modbus.ev._t.monotonic") as mono:
+            mono.return_value = 1000.0
+            await ec.write_setpoint(1500)
+            state.ev_charger_setpoint_raw = 42  # poll: charger kept/clamped to 4.2 kW
+            mono.return_value = 1010.0
+            assert await ec.write_setpoint(1500) is False
+            assert mock_client.write_register.await_count == 1
+            mono.return_value = 1031.0
+            await ec.write_setpoint(1500)
+            assert mock_client.write_register.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_start_charging_clears_cache_and_low_value_is_resent(self):
+        state, ec, mock_client = self._diag_client()
+        await ec.write_setpoint(1500)
+        await ec.start_charging()
+        assert state.ev_charger_setpoint_raw is None
+        await ec.write_setpoint(1500)
+        setpoint_writes = [c for c in mock_client.write_register.await_args_list if c.kwargs["address"] == 10029]
+        assert len(setpoint_writes) == 2
+
     @pytest.mark.asyncio
     async def test_write_setpoint_skips_when_not_connected(self):
         state = self._make_state()
@@ -583,6 +692,71 @@ class TestEVChargerModbusClient:
         assert ok is True
         mock_client.write_register.assert_called_once_with(address=10023, value=1, device_id=247)
         assert state.ev_single_phase_switching_enum == SinglePhaseSwitching.ENABLED
+
+    @pytest.mark.asyncio
+    async def test_write_ems_energy_dispatch_success(self):
+        state = self._make_state()
+        ec = EVChargerModbusClient(state)
+        mock_client = AsyncMock()
+        mock_client.connected = True
+        mock_client.write_register = AsyncMock(return_value=_make_response([]))
+        ec._client = mock_client
+        ok = await ec.write_ems_energy_dispatch(EmsEnergyDispatch.MINIMUM_POWER)
+        assert ok is True
+        mock_client.write_register.assert_called_once_with(address=10000, value=1, device_id=247)
+        assert mock_client.read_holding_registers.call_count == 0
+        assert state.ev_ems_energy_dispatch == 1
+        assert state.ev_ems_energy_dispatch_enum == EmsEnergyDispatch.MINIMUM_POWER
+
+    @pytest.mark.asyncio
+    async def test_write_ems_energy_dispatch_not_connected(self):
+        ec = EVChargerModbusClient(self._make_state())
+        ec._client = None
+        assert await ec.write_ems_energy_dispatch(EmsEnergyDispatch.NORMAL) is False
+
+    @pytest.mark.asyncio
+    async def test_write_ems_energy_dispatch_error_response(self):
+        state = self._make_state()
+        ec = EVChargerModbusClient(state)
+        mock_client = AsyncMock()
+        mock_client.connected = True
+        mock_client.write_register = AsyncMock(return_value=_make_error_response())
+        ec._client = mock_client
+        assert await ec.write_ems_energy_dispatch(EmsEnergyDispatch.NORMAL) is False
+        assert state.ev_ems_energy_dispatch_enum is None
+
+    @pytest.mark.asyncio
+    async def test_read_ems_energy_dispatch_uses_fc03_once(self):
+        state = self._make_state()
+        ec = EVChargerModbusClient(state)
+        mock_client = AsyncMock()
+        mock_client.connected = True
+        mock_client.read_holding_registers = AsyncMock(return_value=_make_response([1]))
+        ec._client = mock_client
+        mode = await ec.read_ems_energy_dispatch()
+        assert mode == EmsEnergyDispatch.MINIMUM_POWER
+        mock_client.read_holding_registers.assert_called_once_with(address=10000, count=1, device_id=247)
+        assert mock_client.read_input_registers.call_count == 0
+        assert state.ev_ems_energy_dispatch == 1
+
+    @pytest.mark.asyncio
+    async def test_read_ems_energy_dispatch_out_of_range_is_unknown(self):
+        state = self._make_state()
+        ec = EVChargerModbusClient(state)
+        mock_client = AsyncMock()
+        mock_client.connected = True
+        mock_client.read_holding_registers = AsyncMock(return_value=_make_response([7]))
+        ec._client = mock_client
+        assert await ec.read_ems_energy_dispatch() == EmsEnergyDispatch.UNKNOWN
+
+    @pytest.mark.asyncio
+    async def test_read_ems_energy_dispatch_not_connected_issues_no_io(self):
+        ec = EVChargerModbusClient(self._make_state())
+        mock_client = AsyncMock()
+        mock_client.connected = False
+        ec._client = mock_client
+        assert await ec.read_ems_energy_dispatch() is None
+        assert mock_client.read_holding_registers.call_count == 0
 
     # --- reconnect ---
 

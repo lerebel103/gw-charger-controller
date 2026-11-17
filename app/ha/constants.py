@@ -34,7 +34,10 @@ COMMAND_MAP: dict[str, tuple[str, str]] = {
     f"{PREFIX}/select/advanced_charging_mode/set": ("ev_advanced_charging_mode", "select"),
     f"{PREFIX}/switch/plug_and_charge_auto_start/set": ("ev_plug_and_charge_auto_start", "switch"),
     f"{PREFIX}/switch/single_phase_switching/set": ("ev_single_phase_switching", "switch"),
+    f"{PREFIX}/switch/ems_energy_dispatch/set": ("ev_ems_energy_dispatch", "switch"),
     f"{PREFIX}/switch/eco_day_min_charge/set": ("eco_day_min_charge_enabled", "switch"),
+    f"{PREFIX}/switch/diag_low_setpoint/set": ("diag_low_setpoint_enabled", "switch"),
+    f"{PREFIX}/switch/diag_setpoint_heartbeat/set": ("diag_setpoint_heartbeat_enabled", "switch"),
     f"{PREFIX}/switch/charge_to_max_soc/set": ("charge_to_max_soc_enabled", "switch"),
     f"{PREFIX}/number/manual_power/set": ("manual_power_w", "float"),
     f"{PREFIX}/number/ev_min_soc/set": ("ev_min_soc_pct", "float"),
@@ -64,7 +67,7 @@ COMMAND_MAP: dict[str, tuple[str, str]] = {
 }
 
 NUMBER_RANGES: dict[str, tuple[float, float]] = {
-    "manual_power_w": (4400, 11000),
+    "manual_power_w": (1400, 22000),
     "ev_min_soc_pct": (0, 100),
     "ev_max_soc_pct": (80, 100),
     "ev_battery_capacity_kwh": (10, 200),
@@ -96,6 +99,7 @@ RUNTIME_EV_COMMAND_FIELDS = {
     "ev_advanced_charging_mode",
     "ev_plug_and_charge_auto_start",
     "ev_single_phase_switching",
+    "ev_ems_energy_dispatch",
 }
 
 EV_RECONNECT_FIELDS = {"ev_charger_ip", "ev_charger_port"}

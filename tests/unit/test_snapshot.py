@@ -159,6 +159,21 @@ class TestBuildSnapshotEVCommsHealthy:
         assert snapshot.ev_soc_pct == 42.0
 
 
+class TestSetpointDiagnosticFields:
+    def test_raw_setpoint_masked_when_ev_unhealthy_status_kept(self):
+        state = AppState(ev_charger_setpoint_raw=15, ev_setpoint_write_status="OK raw=15 (1500 W)")
+        state.ev_comm_healthy = False
+        snap = build_snapshot(_loop(state))
+        assert snap.ev_charger_setpoint_raw is None
+        assert snap.ev_setpoint_write_status == "OK raw=15 (1500 W)"
+
+    def test_raw_setpoint_present_when_healthy(self):
+        state = AppState(ev_charger_setpoint_raw=15, ev_setpoint_write_status="OK raw=15 (1500 W)")
+        state.ev_comm_healthy = True
+        snap = build_snapshot(_loop(state))
+        assert snap.ev_charger_setpoint_raw == 15
+
+
 class TestBuildSnapshotSocEstimator:
     def test_fields_come_from_one_resolve_and_survive_an_ev_outage(self):
         state = AppState()

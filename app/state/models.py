@@ -3,7 +3,13 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from app.state.enums import AdvancedChargingMode, ChargerStatus, PlugAndChargeAutoStart, SinglePhaseSwitching
+from app.state.enums import (
+    AdvancedChargingMode,
+    ChargerStatus,
+    EmsEnergyDispatch,
+    PlugAndChargeAutoStart,
+    SinglePhaseSwitching,
+)
 
 
 @dataclass
@@ -37,6 +43,8 @@ class AppState:
     ev_advanced_charging_mode_enum: AdvancedChargingMode | None = None
     ev_single_phase_switching: int | None = None
     ev_single_phase_switching_enum: SinglePhaseSwitching | None = None
+    ev_ems_energy_dispatch: int | None = None
+    ev_ems_energy_dispatch_enum: EmsEnergyDispatch | None = None
     ev_active_power_w: float | None = None
     ev_active_power_onboard_w: float | None = None
     ev_session_energy_wh: float | None = None
@@ -72,6 +80,11 @@ class AppState:
 
     # Control output
     commanded_setpoint_w: float | None = None
+
+    # Experiment (transient, never persisted): allow register 10029 below 4.4 kW from Manual mode
+    diag_low_setpoint_enabled: bool = False
+    diag_setpoint_heartbeat_enabled: bool = False
+    ev_setpoint_write_status: str | None = None
 
     # Configuration (loaded from config, updated via MQTT)
     charge_mode: str = "Eco"
@@ -196,5 +209,7 @@ class StateSnapshot:
     victron_l2_current_a: float | None = None
     victron_l3_current_a: float | None = None
     commanded_setpoint_w: float | None = None
+    ev_charger_setpoint_raw: int | None = None
+    ev_setpoint_write_status: str | None = None
     uptime_s: float = 0.0
     timestamp: datetime = field(default_factory=datetime.now)

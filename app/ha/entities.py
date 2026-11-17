@@ -139,6 +139,20 @@ ENTITIES: list[dict[str, Any]] = [
     _sensor("ev_charger_current_l3", "EV Current L3", "current_l3", "A", "current", "measurement"),
     _sensor("ev_charger_setpoint", "Charge Setpoint", "setpoint", "W", "power", "measurement"),
     _sensor(
+        "ev_charger_setpoint_raw",
+        "Charger Setpoint Register (raw)",
+        "charger_setpoint_raw",
+        None,
+        entity_category="diagnostic",
+    ),
+    _sensor(
+        "ev_charger_setpoint_write_status",
+        "Setpoint Write Status",
+        "setpoint_write_status",
+        None,
+        entity_category="diagnostic",
+    ),
+    _sensor(
         "ev_charger_l1_voltage_drop",
         "L1 Voltage Drop %",
         "l1_voltage_drop_perc",
@@ -237,9 +251,14 @@ ENTITIES: list[dict[str, Any]] = [
     ),
     _switch("ev_charger_plug_and_charge_auto_start", "Plug and Charge Auto Start", "plug_and_charge_auto_start"),
     _switch("ev_charger_single_phase_switching", "Single Phase Switching", "single_phase_switching"),
+    _switch("ev_charger_ems_energy_dispatch", "EMS Minimum Power (reg 10000)", "ems_energy_dispatch"),
     _switch("ev_charger_eco_day_min_charge", "Auto-start below min SOC", "eco_day_min_charge"),
+    _switch("ev_charger_diag_low_setpoint", "Diagnostic: allow setpoint below 4.4 kW", "diag_low_setpoint"),
+    _switch(
+        "ev_charger_diag_setpoint_heartbeat", "Diagnostic: re-write setpoint every 10 s", "diag_setpoint_heartbeat"
+    ),
     _switch("ev_charger_charge_to_max_soc", "Charge to set max SoC", "charge_to_max_soc"),
-    _number("ev_charger_manual_power", "Manual Charge Power", "manual_power", 4400, 11000, 100, "W"),
+    _number("ev_charger_manual_power", "Manual Charge Power", "manual_power", 1400, 22000, 100, "W"),
     _number("ev_charger_ev_min_soc", "Min EV SOC", "ev_min_soc", 0, 100, 1, "%"),
     _number("ev_charger_ev_max_soc", "Max EV SOC", "ev_max_soc", 80, 100, 1, "%"),
     _number("ev_charger_ev_battery_capacity", "EV Battery Capacity", "ev_battery_capacity", 10, 200, 1, "kWh"),

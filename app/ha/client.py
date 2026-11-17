@@ -57,6 +57,9 @@ from app.ha.parsers import (
     parse_advanced_mode_payload as _parse_advanced_mode_payload,
 )
 from app.ha.parsers import (
+    parse_ems_dispatch_payload as _parse_ems_dispatch_payload,
+)
+from app.ha.parsers import (
     parse_plug_and_charge_payload as _parse_plug_and_charge_payload,
 )
 from app.ha.parsers import (
@@ -66,6 +69,7 @@ from app.log_throttle import LogThrottle
 from app.state import (
     AdvancedChargingMode,
     AppState,
+    EmsEnergyDispatch,
     PlugAndChargeAutoStart,
     SinglePhaseSwitching,
     StateSnapshot,
@@ -202,6 +206,8 @@ class MQTTClient:
         await _pub_if(f"{_PREFIX}/sensor/current_l2/state", _fmt(snapshot.ev_current_b))
         await _pub_if(f"{_PREFIX}/sensor/current_l3/state", _fmt(snapshot.ev_current_c))
         await _pub_if(f"{_PREFIX}/sensor/setpoint/state", _fmt(snapshot.commanded_setpoint_w))
+        await _pub_if(f"{_PREFIX}/sensor/charger_setpoint_raw/state", _fmt(snapshot.ev_charger_setpoint_raw))
+        await _pub_if(f"{_PREFIX}/sensor/setpoint_write_status/state", snapshot.ev_setpoint_write_status)
         await _pub_if(f"{_PREFIX}/sensor/l1_voltage_drop_perc/state", _fmt_drop(snapshot.l1_voltage_drop_pct))
         await _pub_if(f"{_PREFIX}/sensor/l2_voltage_drop_perc/state", _fmt_drop(snapshot.l2_voltage_drop_pct))
         await _pub_if(f"{_PREFIX}/sensor/l3_voltage_drop_perc/state", _fmt_drop(snapshot.l3_voltage_drop_pct))
@@ -322,6 +328,11 @@ class MQTTClient:
                 f"{_PREFIX}/switch/eco_day_min_charge/state",
                 "ON" if s.eco_day_min_charge_enabled else "OFF",
             ),
+            (f"{_PREFIX}/switch/diag_low_setpoint/state", "ON" if s.diag_low_setpoint_enabled else "OFF"),
+            (
+                f"{_PREFIX}/switch/diag_setpoint_heartbeat/state",
+                "ON" if s.diag_setpoint_heartbeat_enabled else "OFF",
+            ),
             (
                 f"{_PREFIX}/switch/charge_to_max_soc/state",
                 "ON" if s.charge_to_max_soc_enabled else "OFF",
@@ -346,6 +357,10 @@ class MQTTClient:
             pairs.append((f"{_PREFIX}/switch/single_phase_switching/state", "ON"))
         elif s.ev_single_phase_switching_enum == SinglePhaseSwitching.DISABLED:
             pairs.append((f"{_PREFIX}/switch/single_phase_switching/state", "OFF"))
+        if s.ev_ems_energy_dispatch_enum == EmsEnergyDispatch.MINIMUM_POWER:
+            pairs.append((f"{_PREFIX}/switch/ems_energy_dispatch/state", "ON"))
+        elif s.ev_ems_energy_dispatch_enum == EmsEnergyDispatch.NORMAL:
+            pairs.append((f"{_PREFIX}/switch/ems_energy_dispatch/state", "OFF"))
 
         for topic, value in pairs:
             await self._client.publish(topic, value, retain=True)
@@ -492,7 +507,9 @@ class MQTTClient:
             logger.warning("Runtime EV command ignored (%s): EV client unavailable", attr)
             return
 
-        enum_value: AdvancedChargingMode | PlugAndChargeAutoStart | SinglePhaseSwitching | None = None
+        enum_value: AdvancedChargingMode | PlugAndChargeAutoStart | SinglePhaseSwitching | EmsEnergyDispatch | None = (
+            None
+        )
 
         if attr == "ev_advanced_charging_mode":
             enum_value = _parse_advanced_mode_payload(payload)
@@ -521,6 +538,15 @@ class MQTTClient:
                 return
             writer = self._ev_client.write_single_phase_switching
             reader = self._ev_client.read_single_phase_switching
+        elif attr == "ev_ems_energy_dispatch":
+            enum_value = _parse_ems_dispatch_payload(payload)
+            if enum_value is None:
+                logger.warning("Invalid switch value '%s' for %s", payload, attr)
+                return
+            if self._state.ev_ems_energy_dispatch_enum == enum_value:
+                return
+            writer = self._ev_client.write_ems_energy_dispatch
+            reader = self._ev_client.read_ems_energy_dispatch
         else:
             logger.warning("Unsupported runtime EV select field: %s", attr)
             return
@@ -545,6 +571,11 @@ class MQTTClient:
                 if confirmed == SinglePhaseSwitching.ENABLED:
                     state_value = "ON"
                 elif confirmed == SinglePhaseSwitching.DISABLED:
+                    state_value = "OFF"
+            elif attr == "ev_ems_energy_dispatch":
+                if confirmed == EmsEnergyDispatch.MINIMUM_POWER:
+                    state_value = "ON"
+                elif confirmed == EmsEnergyDispatch.NORMAL:
                     state_value = "OFF"
             elif attr == "ev_plug_and_charge_auto_start":
                 if confirmed == PlugAndChargeAutoStart.ON:

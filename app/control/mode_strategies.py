@@ -5,6 +5,7 @@ import time as _time
 from abc import ABC, abstractmethod
 
 from app.control.constants import (
+    _DIAG_MIN_CHARGE_W,
     _ECO_DAY_COOLDOWN_S,
     _MAX_CHARGE_W,
     _MIN_CHARGE_W,
@@ -80,7 +81,17 @@ class ManualModeHandler(ModeSetpointHandler):
 
     def compute(self, loop: ModeLoopProtocol) -> float:
         loop._state_machine.set_mode_state(ChargeModeState.MANUAL)
-        return clamp(loop._state.manual_power_w, _MIN_CHARGE_W, _MAX_CHARGE_W)
+        state = loop._state
+        if state.diag_low_setpoint_enabled:
+            return clamp(state.manual_power_w, _DIAG_MIN_CHARGE_W, _MAX_CHARGE_W)
+        if state.manual_power_w < _MIN_CHARGE_W:
+            _throttle.info(
+                "manual_below_min",
+                "Manual power %.0f W raised to %.0f W: diagnostic low setpoint switch is OFF",
+                state.manual_power_w,
+                _MIN_CHARGE_W,
+            )
+        return clamp(state.manual_power_w, _MIN_CHARGE_W, _MAX_CHARGE_W)
 
 
 class StandbyModeHandler(ModeSetpointHandler):
