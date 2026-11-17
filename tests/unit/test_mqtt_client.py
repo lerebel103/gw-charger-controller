@@ -19,6 +19,7 @@ from app.ha.constants import (
 from app.state import (
     AdvancedChargingMode,
     AppState,
+    EmsEnergyDispatch,
     PlugAndChargeAutoStart,
     SinglePhaseSwitching,
     StateSnapshot,
@@ -112,6 +113,47 @@ class TestMQTTRuntimeEVSelects:
         ev.write_single_phase_switching.assert_awaited_once_with(SinglePhaseSwitching.ENABLED)
         ev.read_single_phase_switching.assert_awaited_once()
         ev.disconnect.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_runtime_ems_dispatch_allowed_in_standby_with_disconnect(self):
+        state = AppState(charge_mode="Standby")
+        queue: asyncio.Queue = asyncio.Queue()
+        ev = AsyncMock()
+        ev.connected = True
+        ev.ensure_connected = AsyncMock()
+        ev.disconnect = AsyncMock()
+        ev.write_ems_energy_dispatch = AsyncMock(return_value=True)
+        ev.read_ems_energy_dispatch = AsyncMock(return_value=EmsEnergyDispatch.MINIMUM_POWER)
+        client = MQTTClient(state=state, config_manager=MagicMock(), publish_queue=queue, ev_client=ev)
+        client._client = AsyncMock()
+        await client._handle_command("ev_charger/switch/ems_energy_dispatch/set", "ON")
+        ev.ensure_connected.assert_awaited_once()
+        ev.write_ems_energy_dispatch.assert_awaited_once_with(EmsEnergyDispatch.MINIMUM_POWER)
+        ev.read_ems_energy_dispatch.assert_awaited_once()
+        ev.disconnect.assert_awaited_once()
+        client._client.publish.assert_awaited_with("ev_charger/switch/ems_energy_dispatch/state", "ON", retain=True)
+
+    @pytest.mark.asyncio
+    async def test_runtime_ems_dispatch_invalid_payload_no_io(self):
+        state = AppState(charge_mode="Standby")
+        ev = AsyncMock()
+        ev.connected = True
+        client = MQTTClient(state=state, config_manager=MagicMock(), publish_queue=asyncio.Queue(), ev_client=ev)
+        client._client = AsyncMock()
+        await client._handle_command("ev_charger/switch/ems_energy_dispatch/set", "bogus")
+        await client._handle_command("ev_charger/switch/ems_energy_dispatch/set", "255")
+        ev.ensure_connected.assert_not_called()
+        ev.write_ems_energy_dispatch.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_runtime_ems_dispatch_no_write_when_unchanged(self):
+        state = AppState(charge_mode="Eco", ev_ems_energy_dispatch_enum=EmsEnergyDispatch.NORMAL)
+        ev = AsyncMock()
+        ev.connected = True
+        client = MQTTClient(state=state, config_manager=MagicMock(), publish_queue=asyncio.Queue(), ev_client=ev)
+        client._client = AsyncMock()
+        await client._handle_command("ev_charger/switch/ems_energy_dispatch/set", "OFF")
+        ev.write_ems_energy_dispatch.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_runtime_advanced_mode_accepts_numeric_payload(self):

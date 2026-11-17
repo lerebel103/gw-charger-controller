@@ -3,7 +3,13 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from app.state.enums import AdvancedChargingMode, ChargerStatus, PlugAndChargeAutoStart, SinglePhaseSwitching
+from app.state.enums import (
+    AdvancedChargingMode,
+    ChargerStatus,
+    EmsEnergyDispatch,
+    PlugAndChargeAutoStart,
+    SinglePhaseSwitching,
+)
 
 
 @dataclass
@@ -37,6 +43,8 @@ class AppState:
     ev_advanced_charging_mode_enum: AdvancedChargingMode | None = None
     ev_single_phase_switching: int | None = None
     ev_single_phase_switching_enum: SinglePhaseSwitching | None = None
+    ev_ems_energy_dispatch: int | None = None
+    ev_ems_energy_dispatch_enum: EmsEnergyDispatch | None = None
     ev_active_power_w: float | None = None
     ev_active_power_onboard_w: float | None = None
     ev_session_energy_wh: float | None = None

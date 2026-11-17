@@ -8,6 +8,7 @@ from app.state.enums import (
     ChargeModeState,
     ChargerStatus,
     ChargeSessionState,
+    EmsEnergyDispatch,
     PlugAndChargeAutoStart,
     SinglePhaseSwitching,
 )
@@ -21,6 +22,7 @@ __all__ = [
     "ChargeModeState",
     "ChargeSessionState",
     "ChargerStatus",
+    "EmsEnergyDispatch",
     "PlugAndChargeAutoStart",
     "SinglePhaseSwitching",
 ]

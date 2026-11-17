@@ -117,7 +117,7 @@ This document describes the implementation conventions and architectural decisio
 - **Purpose**: Modbus register I/O for the charger
 - **Register operations**:
   - Read every cycle: status, active power, current, voltage, completion time, total energy, car connection, plug-and-charge, single-phase switching
-  - Write: setpoint (first), start command, stop command, and on-demand runtime registers 10032, 10019, 10023
+  - Write: setpoint (first), start command, stop command, and on-demand runtime registers 10032, 10019, 10023, 10000 (experiment)
 - **Reconnect/Backoff**: Exponential backoff on comms failure
 
 #### `app/modbus/victron.py` (VictronModbusClient)
@@ -130,7 +130,7 @@ This document describes the implementation conventions and architectural decisio
 - **Discovery**: Publish MQTT discovery payloads on startup
 - **Publishing**: Drain the publish queue (snapshots, charging events, config republish requests) and publish sensor values; helpers live in `app/ha/constants.py`, `entities.py` and `parsers.py`
 - **Commands**: Subscribe to charger commands (mode, max SOC, etc.), validate, apply to state
-- **Exception**: Standby mode allows on-demand charger register writes (register 10032, 10019, 10023)
+- **Exception**: Standby mode allows on-demand charger register writes (register 10032, 10019, 10023, 10000)
 
 #### `app/state/models.py` (AppState)
 - **Structure**: Mutable dataclass holding all runtime state
@@ -156,6 +156,7 @@ An explicit exception is allowed for user-initiated Home Assistant commands that
 - Register **10032** (Advanced Charging Mode)
 - Register **10019** (Plug and Charge auto start)
 - Register **10023** (Single phase switching)
+- Register **10000** (EMS Energy Dispatch, experiment branch only)
 
 Constraints for this exception:
 - Must be **on-demand only** (no periodic polling/writing)

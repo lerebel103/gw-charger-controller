@@ -10,7 +10,14 @@ from pymodbus.exceptions import ModbusException
 
 from app.backoff import exponential_backoff
 from app.log_throttle import LogThrottle
-from app.state import AdvancedChargingMode, AppState, ChargerStatus, PlugAndChargeAutoStart, SinglePhaseSwitching
+from app.state import (
+    AdvancedChargingMode,
+    AppState,
+    ChargerStatus,
+    EmsEnergyDispatch,
+    PlugAndChargeAutoStart,
+    SinglePhaseSwitching,
+)
 
 logger = logging.getLogger(__name__)
 _throttle = LogThrottle(logger, suppress_seconds=60.0)
@@ -31,6 +38,10 @@ _REG_TOTAL_ENERGY = 10065
 _REG_CAR_CONNECTION = 10075
 
 # --- Write registers ---
+# Register 10000 "EMS Energy Dispatch" (experiment): RW, U16, size 1, gain 1, range [0,1], not saved to flash.
+# 1 = adjust the charging station's power to the minimum for charging, 0 = normal operation.
+# Read FC03 only; written with write_register (FC06). Never polled: on-demand read-back only.
+_REG_EMS_ENERGY_DISPATCH = 10000
 _REG_PLUG_AND_CHARGE = 10019
 _REG_SINGLE_PHASE_SWITCHING = 10023
 _REG_MAX_CHARGING_POWER = 10029
@@ -349,6 +360,52 @@ class EVChargerModbusClient:
         except (ModbusException, OSError) as exc:
             logger.warning("Failed to write single phase switching: %s", exc)
             return False
+
+    async def write_ems_energy_dispatch(self, mode: EmsEnergyDispatch) -> bool:
+        """Write register 10000 (EMS energy dispatch, experiment)."""
+        if not self.connected:
+            return False
+        try:
+            resp = await self._client.write_register(
+                address=_REG_EMS_ENERGY_DISPATCH,
+                value=int(mode.value),
+                device_id=_SLAVE_ID,
+            )
+            if resp.isError():
+                raise ModbusException(f"EMS energy dispatch write error: {resp}")
+            self._state.ev_ems_energy_dispatch = int(mode.value)
+            self._state.ev_ems_energy_dispatch_enum = mode
+            logger.info(
+                "Wrote EMS energy dispatch: register %d <- raw=%d (%s)",
+                _REG_EMS_ENERGY_DISPATCH,
+                int(mode.value),
+                mode.display_name,
+            )
+            return True
+        except (ModbusException, OSError) as exc:
+            logger.warning("Failed to write EMS energy dispatch: %s", exc)
+            return False
+
+    async def read_ems_energy_dispatch(self) -> EmsEnergyDispatch | None:
+        """Read register 10000 (EMS energy dispatch, FC03). On demand only, not part of the poll cycle."""
+        if not self.connected:
+            return None
+        try:
+            resp = await self._client.read_holding_registers(
+                address=_REG_EMS_ENERGY_DISPATCH,
+                count=1,
+                device_id=_SLAVE_ID,
+            )
+            if resp.isError():
+                raise ModbusException(f"EMS energy dispatch read error: {resp}")
+            raw = resp.registers[0]
+            mode = EmsEnergyDispatch.from_register(raw)
+            self._state.ev_ems_energy_dispatch = raw
+            self._state.ev_ems_energy_dispatch_enum = mode
+            return mode
+        except (ModbusException, OSError) as exc:
+            logger.warning("Failed to read EMS energy dispatch: %s", exc)
+            return None
 
     async def read_plug_and_charge_auto_start(self) -> PlugAndChargeAutoStart | None:
         """Read register 10019 (plug-and-charge auto start)."""
