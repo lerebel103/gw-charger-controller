@@ -25,6 +25,10 @@ BATTERY_POWER = "sensor.reverse_battery_power"
 BATTERY_SOC = "sensor.victronbattery_soc229"
 EV_POWER = "sensor.ev_charger_power"
 EV_SOC = "sensor.ev_charger_ev_soc"
+EV_SESSION_ENERGY = "sensor.ev_charger_session_energy"
+SOC_ESTIMATOR_CSV = (
+    Path(__file__).parent.parent / "fixtures" / "incidents" / "2026-11-15-ev-soc-estimator" / "ev_soc_energy.csv"
+)
 RECORDED_SETPOINT = "sensor.ev_charger_charge_setpoint"
 
 
@@ -81,7 +85,7 @@ def cycle_inputs(row: dict[str, float | None]) -> dict[str, float | None]:
         grid_i[n] = _v(row, f"sensor.victron_grid_{key}_current_30", 0.0)
         ev_v[n] = _v(row, f"sensor.ev_charger_ev_voltage_{key}", GRID_VOLTAGE_DEFAULT_V)
         ev_i[n] = _v(row, f"sensor.ev_charger_ev_current_{key}", 0.0)
-    return {
+    mapped = {
         "grid_power_w": sum(grid_v[n] * grid_i[n] for n in (1, 2, 3)),  # + import, - export
         "solar_battery_power_w": None if row.get(BATTERY_POWER) is None else -row[BATTERY_POWER],
         "solar_battery_soc_pct": row.get(BATTERY_SOC),
@@ -103,3 +107,6 @@ def cycle_inputs(row: dict[str, float | None]) -> dict[str, float | None]:
         "ev_active_power_w": _v(row, EV_POWER, 0.0),
         "ev_soc_pct": row.get(EV_SOC),
     }
+    if row.get(EV_SESSION_ENERGY) is not None:
+        mapped["ev_session_energy_wh"] = row[EV_SESSION_ENERGY]
+    return mapped

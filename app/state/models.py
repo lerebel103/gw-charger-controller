@@ -91,7 +91,10 @@ class AppState:
     manual_power_w: float = 3680.0
     ev_min_soc_pct: float = 40.0
     ev_max_soc_pct: float = 80.0
+    charge_to_max_soc_enabled: bool = True  # False: the max-SOC target never stops or blocks a session
     ev_battery_capacity_kwh: float = 82.0
+    ev_soc_k: float | None = None  # learned charger-energy / battery-energy ratio (see soc_estimator)
+    ev_soc_k_capacity_kwh: float | None = None  # capacity the learned k belongs to
     solar_battery_discharge_floor_pct: float = 20.0
     solar_battery_discharge_start: str = "23:00"
     solar_battery_discharge_end: str = "06:00"
@@ -129,7 +132,10 @@ PERSISTED_FIELDS: set[str] = {
     "manual_power_w",
     "ev_min_soc_pct",
     "ev_max_soc_pct",
+    "charge_to_max_soc_enabled",
     "ev_battery_capacity_kwh",
+    "ev_soc_k",
+    "ev_soc_k_capacity_kwh",
     "solar_battery_discharge_floor_pct",
     "solar_battery_discharge_start",
     "solar_battery_discharge_end",
@@ -189,6 +195,10 @@ class StateSnapshot:
     ev_completion_time_h: int | None = None
     ev_total_energy_wh: float | None = None
     ev_soc_pct: float | None = None
+    ev_soc_estimated_pct: float | None = None
+    ev_soc_source: str | None = None  # SocSource value: reported, estimated or none
+    ev_soc_stalled: bool | None = None
+    ev_soc_k: float | None = None
     l1_voltage_drop_pct: float | None = None
     l2_voltage_drop_pct: float | None = None
     l3_voltage_drop_pct: float | None = None

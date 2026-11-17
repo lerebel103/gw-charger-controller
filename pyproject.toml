@@ -1,6 +1,6 @@
 [project]
 name = "ev-charger-integration"
-version = "0.2.1"
+version = "0.2.2"
 requires-python = ">=3.14"
 dependencies = [
     "pymodbus==3.16.1",

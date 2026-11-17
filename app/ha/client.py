@@ -219,6 +219,12 @@ class MQTTClient:
         await _pub_if(f"{_PREFIX}/sensor/grid_current_l3/state", _fmt(snapshot.victron_l3_current_a))
         await _pub_if(f"{_PREFIX}/sensor/completion_time/state", _fmt(snapshot.ev_completion_time_h))
         await _pub_if(f"{_PREFIX}/sensor/ev_soc/state", _fmt(snapshot.ev_soc_pct))
+        await _pub_if(f"{_PREFIX}/sensor/ev_soc_estimated/state", _fmt(snapshot.ev_soc_estimated_pct))
+        await _pub_if(f"{_PREFIX}/sensor/ev_soc_source/state", _fmt(snapshot.ev_soc_source))
+        await _pub_if(
+            f"{_PREFIX}/sensor/ev_soc_k/state",
+            None if snapshot.ev_soc_k is None else str(round(snapshot.ev_soc_k, 4)),
+        )
         await _pub_if(f"{_PREFIX}/sensor/status/state", _fmt(snapshot.ev_charger_status_display))
         await _pub_if(
             f"{_PREFIX}/sensor/comm_connection_status/state",
@@ -231,6 +237,7 @@ class MQTTClient:
         )
 
         # Binary sensor
+        await _pub_if(f"{_PREFIX}/binary_sensor/ev_soc_stalled/state", _fmt_binary(snapshot.ev_soc_stalled))
         await _pub_if(
             f"{_PREFIX}/binary_sensor/connected/state",
             _fmt_binary(snapshot.ev_connected),
@@ -325,6 +332,10 @@ class MQTTClient:
             (
                 f"{_PREFIX}/switch/diag_setpoint_heartbeat/state",
                 "ON" if s.diag_setpoint_heartbeat_enabled else "OFF",
+            ),
+            (
+                f"{_PREFIX}/switch/charge_to_max_soc/state",
+                "ON" if s.charge_to_max_soc_enabled else "OFF",
             ),
         ]
 

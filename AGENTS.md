@@ -103,6 +103,9 @@ This document describes the implementation conventions and architectural decisio
 - **Manual** (experiment branch): floor is `_MIN_CHARGE_W`, or `_DIAG_MIN_CHARGE_W` (1400 W) while the transient `diag_low_setpoint_enabled` switch is ON; `write_setpoint` then floors at raw 14 instead of 44 and the state machine skips external-stop detection for setpoints below 4.4 kW
 - **Eco Day Min Charge** (HA label "Auto-start below min SOC"): a floor of `_MIN_CHARGE_W` in Eco day and Eco night while `eco_day_min_charge_enabled` and EV SOC < `ev_min_soc_pct`; the eco-day ramp runs above it and eco gates cannot drop it below or end the session (breaker limiter still can)
 
+#### `app/control/soc_estimator.py` (SocEstimator)
+- **Purpose**: Pure, clock-free energy-based EV SOC estimate (anchor on the last changed reported SOC plus session energy deltas), stall detection and learned efficiency `k`; no Modbus I/O. Instance lives on `ControlLoop._soc_estimator`; `power_utils.get_ev_soc` / `resolve_ev_soc` / `max_soc_stop_reason` are the entry points (see `docs/soc-estimator.md`). `max_soc_stop_reason` is the single max-SOC gate and returns None when `charge_to_max_soc_enabled` (HA switch "Charge to set max SoC") is off
+
 #### `app/control/power_utils.py` (Utility Functions)
 - **Purpose**: Helpers for sample recording and pruning, EV SOC lookup, and clamping
 - **Consumers**: mode_strategy handlers and the state machine

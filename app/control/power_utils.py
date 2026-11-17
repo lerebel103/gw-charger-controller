@@ -5,11 +5,14 @@ import time as _time
 from datetime import datetime
 
 from app.control.constants import (
+    _EV_MAX_SOC_MARGIN_PCT,
     _EV_SOC_STALE_S,
     _MAX_CHARGE_W,
     _MIN_CHARGE_W,
+    _SOC_ESTIMATE_MARGIN_PCT,
 )
 from app.control.protocols import SamplingLoopProtocol
+from app.control.soc_estimator import SocResolution, SocSource, effective_k
 from app.control.time_utils import parse_hhmm, validate_hhmm
 
 logger = logging.getLogger(__name__)
@@ -20,14 +23,51 @@ def clamp(value: float, min_val: float, max_val: float) -> float:
     return max(min_val, min(value, max_val))
 
 
-def get_ev_soc(loop: SamplingLoopProtocol) -> float | None:
-    """Return ev_soc_pct if fresh, else None."""
+def ev_soc_is_fresh(loop: SamplingLoopProtocol) -> bool:
+    """Return True if a reported SOC exists and was received within the stale window."""
     state = loop._state
     if state.ev_soc_pct is None or state.ev_soc_pct_updated_at is None:
+        return False
+    return (_time.monotonic() - state.ev_soc_pct_updated_at) <= _EV_SOC_STALE_S
+
+
+def resolve_ev_soc(loop: SamplingLoopProtocol) -> SocResolution:
+    """Resolve the effective SOC (reported when healthy, estimated when stalled or stale)."""
+    state = loop._state
+    return loop._soc_estimator.resolve(
+        reported_pct=state.ev_soc_pct,
+        reported_fresh=ev_soc_is_fresh(loop),
+        capacity_kwh=state.ev_battery_capacity_kwh,
+        k=effective_k(state),
+    )
+
+
+def get_ev_soc(loop: SamplingLoopProtocol) -> float | None:
+    """Return the effective SOC: reported if healthy, estimated if stalled or stale, else None."""
+    return resolve_ev_soc(loop).effective_pct
+
+
+def max_soc_stop_reason(loop: SamplingLoopProtocol) -> str | None:
+    """Return the stop reason when the max-SOC limit is reached, else None.
+
+    ``max_soc_reached`` comes from the reported SOC (0.5 pp margin only at a 100 % limit). ``max_soc_estimated``
+    comes from the energy estimate: no margin while the report is healthy (the estimate is only a safety net),
+    ``_SOC_ESTIMATE_MARGIN_PCT`` once the estimate is the SOC source. ``ev_max_soc_pct`` is authoritative.
+    Returns None when the "Charge to set max SoC" switch is off (``charge_to_max_soc_enabled`` False): the
+    target then never stops or blocks a session. Only this check is disabled; the SOC itself is unchanged.
+    """
+    if not loop._state.charge_to_max_soc_enabled:
         return None
-    if (_time.monotonic() - state.ev_soc_pct_updated_at) > _EV_SOC_STALE_S:
-        return None
-    return state.ev_soc_pct
+    limit = loop._state.ev_max_soc_pct
+    resolution = resolve_ev_soc(loop)
+    rep_margin = _EV_MAX_SOC_MARGIN_PCT if limit >= 100.0 else 0.0
+    if resolution.reported_pct is not None and resolution.reported_pct >= limit - rep_margin:
+        return "max_soc_reached"
+    if resolution.estimated_pct is not None:
+        est_margin = _SOC_ESTIMATE_MARGIN_PCT if resolution.source is SocSource.ESTIMATED else 0.0
+        if resolution.estimated_pct >= limit - est_margin:
+            return "max_soc_estimated"
+    return None
 
 
 def record_samples(loop: SamplingLoopProtocol) -> None:

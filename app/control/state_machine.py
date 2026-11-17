@@ -5,14 +5,13 @@ import time as _time
 from abc import ABC, abstractmethod
 
 from app.control.constants import (
-    _EV_MAX_SOC_MARGIN_PCT,
     _EV_STATUS_STALE_S,
     _EXTERNAL_STOP_CONFIRM_TICKS,
     _MIN_CHARGE_W,
     _STOPPED_DELAY_S,
     _STOPPING_MIN_DELAY_S,
 )
-from app.control.power_utils import get_ev_soc, mean_battery_power
+from app.control.power_utils import get_ev_soc, max_soc_stop_reason, mean_battery_power, resolve_ev_soc
 from app.control.protocols import SessionLoopProtocol
 from app.control.time_utils import is_within_discharge_window
 from app.state import ChargeModeState, ChargerStatus, ChargeSessionState
@@ -188,6 +187,7 @@ class StoppedPendingSessionStateHandler(SessionStateHandler):
                 "reason": loop._stopping_reason or "unknown",
                 "session_energy_wh": state.ev_session_energy_wh,
                 "ev_soc_pct": get_ev_soc(loop),
+                "soc_source": str(resolve_ev_soc(loop).source),
             }
         )
         logger.info(
@@ -277,10 +277,9 @@ class ChargingStateMachine:
     def determine_stop_reason(self) -> str:
         """Determine why charging is stopping based on current loop state."""
         state = self.loop._state
-        ev_soc = get_ev_soc(self.loop)
-        margin = _EV_MAX_SOC_MARGIN_PCT if state.ev_max_soc_pct >= 100.0 else 0.0
-        if ev_soc is not None and ev_soc >= (state.ev_max_soc_pct - margin):
-            return "max_soc_reached"
+        max_soc_reason = max_soc_stop_reason(self.loop)
+        if max_soc_reason is not None:
+            return max_soc_reason
         if not state.ev_connected:
             return "vehicle_disconnected"
         if state.charge_mode == "Standby":
