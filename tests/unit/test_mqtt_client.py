@@ -764,3 +764,58 @@ def test_power_entities_computed_and_onboard():
     onboard = by_id["ev_charger_power_onboard"]
     assert onboard["name"] == "Charge Power (onboard)"
     assert onboard["state_topic"] == "ev_charger/sensor/power_onboard/state"
+
+
+def _diag_client(state=None):
+    state = state or AppState(charge_mode="Manual")
+    cm = MagicMock()
+    client = MQTTClient(state=state, config_manager=cm, publish_queue=asyncio.Queue(), ev_client=AsyncMock())
+    client._client = AsyncMock()
+    return client, state, cm
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("payload", "expected"), [("1400", 1400.0), ("22000", 22000.0), ("1500", 1500.0)])
+async def test_manual_power_accepts_low_and_high_range(payload, expected):
+    client, state, _ = _diag_client()
+    await client._handle_command("ev_charger/number/manual_power/set", payload)
+    assert state.manual_power_w == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", ["1300", "22100"])
+async def test_manual_power_rejects_out_of_range(payload):
+    client, state, _ = _diag_client()
+    before = state.manual_power_w
+    await client._handle_command("ev_charger/number/manual_power/set", payload)
+    assert state.manual_power_w == before
+
+
+@pytest.mark.asyncio
+async def test_diag_switches_set_state_and_are_not_persisted():
+    from app.state.models import PERSISTED_FIELDS
+
+    client, state, _ = _diag_client()
+    await client._handle_command("ev_charger/switch/diag_low_setpoint/set", "ON")
+    await client._handle_command("ev_charger/switch/diag_setpoint_heartbeat/set", "ON")
+    assert state.diag_low_setpoint_enabled is True
+    assert state.diag_setpoint_heartbeat_enabled is True
+    await client._handle_command("ev_charger/switch/diag_low_setpoint/set", "OFF")
+    assert state.diag_low_setpoint_enabled is False
+    await client._handle_command("ev_charger/switch/diag_low_setpoint/set", "bogus")
+    assert state.diag_low_setpoint_enabled is False
+    assert "diag_low_setpoint_enabled" not in PERSISTED_FIELDS
+    assert "diag_setpoint_heartbeat_enabled" not in PERSISTED_FIELDS
+
+
+def test_diag_entities_and_manual_range_in_discovery():
+    from app.ha.entities import ENTITIES
+
+    by_id = {e["unique_id"]: e for e in ENTITIES}
+    manual = by_id["ev_charger_manual_power"]
+    assert manual["min"] == 1400
+    assert manual["max"] == 22000
+    assert by_id["ev_charger_diag_low_setpoint"]["command_topic"] == "ev_charger/switch/diag_low_setpoint/set"
+    assert by_id["ev_charger_diag_setpoint_heartbeat"]["component"] == "switch"
+    assert by_id["ev_charger_setpoint_raw"]["state_topic"] == "ev_charger/sensor/charger_setpoint_raw/state"
+    assert by_id["ev_charger_setpoint_write_status"]["state_topic"] == "ev_charger/sensor/setpoint_write_status/state"

@@ -47,12 +47,15 @@ _REG_SINGLE_PHASE_SWITCHING = 10023
 _REG_MAX_CHARGING_POWER = 10029
 _REG_CHARGER_ENABLE = 10060
 _RAW_SETPOINT_MIN = 44  # practical minimum to reliably start charging (= 4.4 kW)
+_RAW_DIAG_SETPOINT_MIN = 14  # register minimum per spec (= 1.4 kW); only used with the diagnostic switch
 _RAW_RUNTIME_SETPOINT_MIN = 42  # documented physical minimum (= 4.2 kW)
 _RAW_SETPOINT_MAX = 220  # 22.0 kW
 # Plausible per-phase current range for the 22 kW charger (32 A rated, 1.25x margin). A reading outside
 # 0..EV_MAX_PHASE_CURRENT_A (e.g. 0xFFFF -> 6553.5 A) is a bad register value, not a measurement.
 EV_MAX_PHASE_CURRENT_A = 40.0
 
+_HEARTBEAT_INTERVAL_S = 10.0  # diagnostic heartbeat: re-write 10029 at most this often
+_LOW_REWRITE_MIN_S = 30.0  # flash guard: min gap between identical low (<4.4 kW) writes the charger does not keep
 _RECONNECT_DELAY_S = 1.0
 _RECONNECT_DELAY_MAX_S = 60.0
 _CONNECT_TIMEOUT_S = 3.0
@@ -107,6 +110,8 @@ class EVChargerModbusClient:
         self._reconnect_after: float = 0.0
         self._serial_read_attempted: bool = False
         self._consecutive_read_failures: int = 0
+        self._last_setpoint_write_at: float | None = None
+        self._last_setpoint_write_raw: int | None = None
 
     @property
     def connected(self) -> bool:
@@ -212,7 +217,9 @@ class EVChargerModbusClient:
             power_w: Desired charge power in watts.
 
                 Operational notes:
-                - 4.4 kW is the practical minimum that reliably starts charging.
+                - 4.4 kW is the practical minimum that reliably starts charging. Values below it are
+                  raised to 4.4 kW, unless ``diag_low_setpoint_enabled`` is set (experiment), in which
+                  case the value is written verbatim down to the register minimum of 1.4 kW.
                 - 4.2 kW may be used by the control loop immediately before an
                   explicit stop command to keep register values in-range while
                   intentionally stopping charging.
@@ -229,22 +236,59 @@ class EVChargerModbusClient:
             return False
 
         raw = round(power_w / 100) if power_w > 0 else 0
-        if raw > 0 and raw < _RAW_SETPOINT_MIN:
-            raw = _RAW_SETPOINT_MIN
-
+        floor = _RAW_DIAG_SETPOINT_MIN if self._state.diag_low_setpoint_enabled else _RAW_SETPOINT_MIN
+        if raw > 0 and raw < floor:
+            raw = floor
+        now = _t.monotonic()
+        heartbeat_due = (
+            self._state.diag_setpoint_heartbeat_enabled
+            and self._last_setpoint_write_at is not None
+            and now - self._last_setpoint_write_at >= _HEARTBEAT_INTERVAL_S
+        )
         if self._state.ev_charger_setpoint_raw is not None and raw == self._state.ev_charger_setpoint_raw:
-            return True
-
+            if not heartbeat_due:
+                return True
+        elif (
+            0 < raw < _RAW_SETPOINT_MIN
+            and not heartbeat_due
+            and raw == self._last_setpoint_write_raw
+            and self._last_setpoint_write_at is not None
+            and now - self._last_setpoint_write_at < _LOW_REWRITE_MIN_S
+        ):
+            # The charger reads back something else than we wrote (ignored or clamped). Do not
+            # rewrite the flash-saved register every cycle.
+            _throttle.warning(
+                "ev_setpoint_low_readback",
+                "Charger reads raw=%s after writing raw=%d to register 10029",
+                self._state.ev_charger_setpoint_raw,
+                raw,
+            )
+            return False
+        low = 0 < raw < _RAW_SETPOINT_MIN
         try:
             resp = await self._client.write_register(address=_REG_MAX_CHARGING_POWER, value=raw, device_id=_SLAVE_ID)
             if resp.isError():
                 raise ModbusException(f"Setpoint write error: {resp}")
             self._state.ev_charger_setpoint_raw = raw
+            self._last_setpoint_write_at = now
+            self._last_setpoint_write_raw = raw
+            self._state.ev_setpoint_write_status = f"OK raw={raw} ({raw * 100} W)"
             _throttle.clear("ev_setpoint_write_fail")
-            logger.debug("Wrote charging setpoint raw=%d (%.0f W)", raw, power_w)
+            if low or heartbeat_due:
+                logger.info("Wrote charging setpoint: register 10029 <- raw=%d (%d W)", raw, raw * 100)
+            else:
+                logger.debug("Wrote charging setpoint raw=%d (%.0f W)", raw, power_w)
             return True
         except (ModbusException, OSError) as exc:
-            _throttle.warning("ev_setpoint_write_fail", "EV charger setpoint write failed: %s", exc)
+            self._last_setpoint_write_at = now
+            self._last_setpoint_write_raw = raw
+            self._state.ev_setpoint_write_status = f"FAILED raw={raw}: {exc}"
+            if low:
+                logger.warning(
+                    "EV setpoint write REJECTED/failed: register 10029 raw=%d (%d W): %s", raw, raw * 100, exc
+                )
+            else:
+                _throttle.warning("ev_setpoint_write_fail", "EV charger setpoint write failed: %s", exc)
             return False
 
     async def ensure_plug_and_charge(self) -> None:
@@ -460,6 +504,8 @@ class EVChargerModbusClient:
         if not self.connected:
             return
         self._state.ev_charger_setpoint_raw = None
+        self._last_setpoint_write_at = None
+        self._last_setpoint_write_raw = None
         try:
             await self._client.write_register(address=_REG_CHARGER_ENABLE, value=2, device_id=_SLAVE_ID)
         except (ModbusException, OSError) as exc:

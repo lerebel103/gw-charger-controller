@@ -3,6 +3,7 @@
 # Charger hardware limits
 _MIN_CHARGE_W = 4400.0
 _MAX_CHARGE_W = 22000.0
+_DIAG_MIN_CHARGE_W = 1400.0  # Manual floor while the diagnostic low-setpoint switch is ON (experiment)
 _STOP_PRESET_W = 4200.0  # written before stop command to avoid writing setpoint=0 to charger
 
 # Eco outside-window thresholds (applied to rolling means)

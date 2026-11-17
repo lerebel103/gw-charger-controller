@@ -81,6 +81,11 @@ class AppState:
     # Control output
     commanded_setpoint_w: float | None = None
 
+    # Experiment (transient, never persisted): allow register 10029 below 4.4 kW from Manual mode
+    diag_low_setpoint_enabled: bool = False
+    diag_setpoint_heartbeat_enabled: bool = False
+    ev_setpoint_write_status: str | None = None
+
     # Configuration (loaded from config, updated via MQTT)
     charge_mode: str = "Eco"
     manual_power_w: float = 3680.0
@@ -194,5 +199,7 @@ class StateSnapshot:
     victron_l2_current_a: float | None = None
     victron_l3_current_a: float | None = None
     commanded_setpoint_w: float | None = None
+    ev_charger_setpoint_raw: int | None = None
+    ev_setpoint_write_status: str | None = None
     uptime_s: float = 0.0
     timestamp: datetime = field(default_factory=datetime.now)

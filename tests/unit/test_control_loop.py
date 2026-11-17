@@ -40,6 +40,20 @@ class TestComputeSetpoint:
         cl = make_control_loop(state)
         assert compute_setpoint(cl) == _MIN_CHARGE_W
 
+    @pytest.mark.parametrize(
+        ("manual", "expected"),
+        [(1400.0, 1400.0), (1500.0, 1500.0), (22000.0, 22000.0), (1000.0, 1400.0), (50000.0, 22000.0)],
+    )
+    def test_manual_mode_diag_low_setpoint(self, manual, expected):
+        state = AppState(ev_connected=True, charge_mode="Manual", manual_power_w=manual, diag_low_setpoint_enabled=True)
+        cl = make_control_loop(state)
+        assert compute_setpoint(cl) == expected
+
+    def test_manual_mode_switch_off_still_floors_1500(self):
+        state = AppState(ev_connected=True, charge_mode="Manual", manual_power_w=1500.0)
+        cl = make_control_loop(state)
+        assert compute_setpoint(cl) == _MIN_CHARGE_W
+
     def test_manual_mode_clamps_high(self):
         state = AppState(ev_connected=True, charge_mode="Manual", manual_power_w=50000.0)
         cl = make_control_loop(state)
@@ -1499,3 +1513,53 @@ class TestStandbyExitReconnect:
         # Should NOT reconnect while still in standby
         ev.reconnect.assert_not_awaited()
         assert cl._standby_write_quiet is True
+
+
+class TestDiagLowSetpointSession:
+    """Experiment: a low Manual setpoint must not end the session or be rewritten by the loop."""
+
+    def _cl(self, **overrides):
+        helper = TestChargingEvents()
+        state = helper._make_state(
+            ev_charger_status_enum=ChargerStatus.CHARGING_COMPLETED,
+            ev_session_energy_wh=8000.0,
+            manual_power_w=1500.0,
+            **overrides,
+        )
+        cl = make_control_loop(state)
+        cl._charging_session_state = ChargeSessionState.CHARGING
+        cl._last_positive_setpoint = 1500.0
+        return cl
+
+    def test_no_external_stop_with_switch_on_and_low_setpoint(self):
+        cl = self._cl(diag_low_setpoint_enabled=True)
+        for _ in range(5):
+            assert cl._state_machine.apply_charging_events(1500.0) == 1500.0
+        assert cl._charging_session_state == ChargeSessionState.CHARGING
+
+    def test_external_stop_still_detected_with_switch_off(self):
+        cl = self._cl(diag_low_setpoint_enabled=False)
+        cl._state_machine.apply_charging_events(1500.0)
+        assert cl._state_machine.apply_charging_events(1500.0) == 0.0
+        assert cl._charging_session_state == ChargeSessionState.STOPPED_PENDING
+
+    def test_external_stop_still_detected_with_switch_on_at_or_above_floor(self):
+        cl = self._cl(diag_low_setpoint_enabled=True)
+        cl._state_machine.apply_charging_events(_MIN_CHARGE_W)
+        assert cl._state_machine.apply_charging_events(_MIN_CHARGE_W) == 0.0
+
+    def test_apply_ev_output_writes_low_setpoint_verbatim(self):
+        import asyncio as _asyncio
+
+        cl = self._cl(diag_low_setpoint_enabled=True)
+        cl._state.ev_charger_status_enum = ChargerStatus.CHARGING_IN_PROGRESS
+        _asyncio.run(cl._apply_ev_output(1500.0, suppress_ev_writes=False))
+        cl._ev_client.write_setpoint.assert_awaited_once_with(1500.0)
+        cl._ev_client.stop_charging.assert_not_awaited()
+
+    def test_breaker_limiter_passes_low_setpoint_unchanged(self):
+        from app.control.breaker import limit_phase_current
+        from tests.unit.breaker_helpers import make_state
+
+        cl = make_control_loop(make_state(diag_low_setpoint_enabled=True))
+        assert limit_phase_current(cl, 1500.0) == 1500.0

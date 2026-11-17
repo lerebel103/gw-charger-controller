@@ -100,6 +100,7 @@ This document describes the implementation conventions and architectural decisio
 - **Classes**: `NoVehicleModeHandler`, `MaxSocBlockedModeHandler`, `ManualModeHandler`, `StandbyModeHandler`, `EcoVictronDownModeHandler`, `EcoNightModeHandler`, `EcoDayModeHandler`
 - **Pattern**: OO strategy; each mode has a `compute(loop) -> float` method
 - **Dispatch**: `compute_setpoint()` uses `resolve_mode_handler()` to pick the handler from the charge mode and vehicle state
+- **Manual** (experiment branch): floor is `_MIN_CHARGE_W`, or `_DIAG_MIN_CHARGE_W` (1400 W) while the transient `diag_low_setpoint_enabled` switch is ON; `write_setpoint` then floors at raw 14 instead of 44 and the state machine skips external-stop detection for setpoints below 4.4 kW
 - **Eco Day Min Charge** (HA label "Auto-start below min SOC"): a floor of `_MIN_CHARGE_W` in Eco day and Eco night while `eco_day_min_charge_enabled` and EV SOC < `ev_min_soc_pct`; the eco-day ramp runs above it and eco gates cannot drop it below or end the session (breaker limiter still can)
 
 #### `app/control/power_utils.py` (Utility Functions)

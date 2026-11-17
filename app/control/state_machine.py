@@ -8,6 +8,7 @@ from app.control.constants import (
     _EV_MAX_SOC_MARGIN_PCT,
     _EV_STATUS_STALE_S,
     _EXTERNAL_STOP_CONFIRM_TICKS,
+    _MIN_CHARGE_W,
     _STOPPED_DELAY_S,
     _STOPPING_MIN_DELAY_S,
 )
@@ -57,6 +58,13 @@ class ChargingSessionStateHandler(SessionStateHandler):
         loop = machine.loop
         state = loop._state
         wants_to_charge = setpoint > 0
+        if state.diag_low_setpoint_enabled and 0 < setpoint < _MIN_CHARGE_W:
+            # Experiment: the charger may pause or interrupt at a low setpoint; do not end the session.
+            if loop._external_stop_ticks:
+                logger.info("External stop detection suspended (diagnostic low setpoint)")
+            loop._external_stop_ticks = 0
+            loop._last_positive_setpoint = setpoint
+            return setpoint
 
         if (
             wants_to_charge

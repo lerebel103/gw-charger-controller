@@ -19,7 +19,7 @@ An intelligent EV charging controller that bridges a **GoodWe GW22K-HCA-20** cha
 | Mode | Behaviour |
 |------|-----------|
 | **Eco** | Maximises solar self-consumption. Daytime: ramps EV power up/down to track solar surplus. Night: draws from home battery at a fixed rate to reach a minimum EV SOC by morning. |
-| **Manual** | Charges at a fixed user-configured power (4.4–22 kW). Resets to Eco on unplug. |
+| **Manual** | Charges at a fixed user-configured power (4.4–22 kW; 1.4–22 kW with the experimental diagnostic switch, see below). Resets to Eco on unplug. |
 | **Standby** | Stops charging and suppresses all EV charger communication. |
 
 ### Auto-start below min SOC
@@ -35,6 +35,13 @@ An optional feature (toggle the "Auto-start below min SOC" switch in HA; formerl
 - HA shows the mode sub-state `eco_day_min_charge` while held at the 4.4 kW floor and `eco_day_ramping` while ramping above it
 - Disabled by default to preserve existing behaviour
 
+### Experiment: low setpoint diagnostic (branch `experiment/reg-10000-toggle` only)
+Purpose: find out whether the charger accepts a 10029 setpoint below 4.4 kW (and switches to single phase). Production behaviour is unchanged unless you turn the switch on.
+- **"Diagnostic: allow setpoint below 4.4 kW"** (switch, OFF by default, not persisted, resets to OFF on restart): in **Manual** mode the Manual Charge Power (now 1.4–22 kW in HA) is written to register 10029 verbatim, rounded to 100 W, from raw 14 (1.4 kW). With the switch OFF, Manual stays at 4.4–22 kW and lower values are raised to 4.4 kW (logged at INFO).
+- While the switch is ON and the setpoint is below 4.4 kW, external-stop detection is suspended so the charger's 0 A pause cannot end the session. Eco keeps its 4.4 kW floor regardless of the switch. The breaker limiter still applies and can cut or stop.
+- **"Diagnostic: re-write setpoint every 10 s"** (heartbeat, OFF by default, not persisted): rewrites 10029 every 10 s even when unchanged. Use briefly, 10029 is saved to flash.
+- Low writes are logged at INFO (`register 10029 <- raw=15 (1500 W)`). A Modbus rejection is logged as a WARNING, shown in the "Setpoint Write Status" sensor and never clamped to 4.4 kW. "Charger Setpoint Register (raw)" shows the value read back from the charger. If the charger reads back a different value, the same low value is not rewritten more often than every 30 s.
+- **Restore afterwards**: set Manual Charge Power to 4400 W or more, turn both diagnostic switches OFF, change Mode to Eco or Standby, and confirm the raw register reads 44 or more. Register 10029 is flash-saved, and stopping a Manual session writes the 4.2 kW stop preset, so always check the final value.
 ### Eco Day Ramp
 The eco day ramp is driven only by site signals: grid power, battery power and battery SOC (rolling means for start/stop, instantaneous battery power for the ramp direction). Each control cycle it adds one ramp step (`eco_day_ramp_step_w`) while battery power is above -200 W. When the battery discharges by more than 200 W it ramps down by one ramp step per cycle; a 5 minute mean battery discharge beyond `solar_battery_day_power_limit_w` stops the charge (or holds 4.4 kW while below Min EV SOC with the switch on). The car's actual draw is never used: the setpoint is a desired value, and a car that steps current in whole amps, lags or ignores it cannot stall the ramp. The ramp is bounded by 4.4 kW (or the floor above), the 22 kW charger maximum, the breaker limiter and the anti-windup clamp (see [docs/grid-power-scaling.md](docs/grid-power-scaling.md)).
 ## Breaker Protection
@@ -126,7 +133,7 @@ Drop CSVs, PDFs and logs for an agent into `incoming/` (gitignored). The git pol
 
 ## Hardware
 
-- **EV Charger**: GoodWe GW22K-HCA-20 (Modbus TCP, slave ID 247, setpoint range 4.4–22 kW)
+- **EV Charger**: GoodWe GW22K-HCA-20 (Modbus TCP, slave ID 247, setpoint range 4.4–22 kW; 1.4 kW is accepted only by the experimental diagnostic switch)
 - **Energy System**: Victron GX (Modbus TCP, unit ID 100 for system, configurable for grid meter)
 
 ## License

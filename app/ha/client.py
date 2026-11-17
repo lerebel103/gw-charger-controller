@@ -206,6 +206,8 @@ class MQTTClient:
         await _pub_if(f"{_PREFIX}/sensor/current_l2/state", _fmt(snapshot.ev_current_b))
         await _pub_if(f"{_PREFIX}/sensor/current_l3/state", _fmt(snapshot.ev_current_c))
         await _pub_if(f"{_PREFIX}/sensor/setpoint/state", _fmt(snapshot.commanded_setpoint_w))
+        await _pub_if(f"{_PREFIX}/sensor/charger_setpoint_raw/state", _fmt(snapshot.ev_charger_setpoint_raw))
+        await _pub_if(f"{_PREFIX}/sensor/setpoint_write_status/state", snapshot.ev_setpoint_write_status)
         await _pub_if(f"{_PREFIX}/sensor/l1_voltage_drop_perc/state", _fmt_drop(snapshot.l1_voltage_drop_pct))
         await _pub_if(f"{_PREFIX}/sensor/l2_voltage_drop_perc/state", _fmt_drop(snapshot.l2_voltage_drop_pct))
         await _pub_if(f"{_PREFIX}/sensor/l3_voltage_drop_perc/state", _fmt_drop(snapshot.l3_voltage_drop_pct))
@@ -318,6 +320,11 @@ class MQTTClient:
             (
                 f"{_PREFIX}/switch/eco_day_min_charge/state",
                 "ON" if s.eco_day_min_charge_enabled else "OFF",
+            ),
+            (f"{_PREFIX}/switch/diag_low_setpoint/state", "ON" if s.diag_low_setpoint_enabled else "OFF"),
+            (
+                f"{_PREFIX}/switch/diag_setpoint_heartbeat/state",
+                "ON" if s.diag_setpoint_heartbeat_enabled else "OFF",
             ),
         ]
 
